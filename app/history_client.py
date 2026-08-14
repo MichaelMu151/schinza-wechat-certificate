@@ -536,6 +536,7 @@ def fetch_history_days(
     should_cancel: Callable[[], bool] | None = None,
     start_ts: int | None = None,
     end_ts: int | None = None,
+    start_offset: int = 0,
 ) -> dict[str, Any]:
     """Paginate getmsg and keep articles with publish_ts within the last ``days``.
 
@@ -551,7 +552,14 @@ def fetch_history_days(
     cred = normalize_credentials(cred)
     ok, err = validate_credentials(cred)
     if not ok:
-        return {"ok": False, "error": err, "articles": [], "pages": 0}
+        return {
+            "ok": False,
+            "error": err,
+            "articles": [],
+            "pages": 0,
+            "start_offset": max(0, int(start_offset)),
+            "next_offset": max(0, int(start_offset)),
+        }
 
     cutoff: int | None = None
     upper_ts: int | None = None
@@ -575,7 +583,7 @@ def fetch_history_days(
         scope = "全部历史" if days is None else f"近 {days} 天"
     articles: list[dict[str, Any]] = []
     pages = 0
-    offset = 0
+    offset = max(0, int(start_offset))
     sess = requests.Session()
     sess.trust_env = False
     hit_page_cap = False
@@ -599,6 +607,8 @@ def fetch_history_days(
                 "cutoff_ts": cutoff,
                 "warning": "",
                 "merged_sightings": max(0, len(partial) - len(_dedupe(articles))),
+                "next_offset": offset,
+                "start_offset": max(0, int(start_offset)),
             }
         if on_progress:
             elapsed = int(time.time() - t0)
@@ -631,6 +641,8 @@ def fetch_history_days(
                 "cutoff_ts": cutoff,
                 "warning": "",
                 "merged_sightings": max(0, len(partial) - len(_dedupe(articles))),
+                "next_offset": offset,
+                "start_offset": max(0, int(start_offset)),
             }
 
         batch = page.get("articles") or []
@@ -664,6 +676,8 @@ def fetch_history_days(
             break
         if raw_msg_count <= 0 and not batch:
             break
+        if not last_can_continue:
+            break
 
         nxt = page.get("next_offset")
         if nxt is None:
@@ -682,7 +696,6 @@ def fetch_history_days(
             time.sleep(sleep_s)
         else:
             hit_page_cap = True
-            last_can_continue = True
 
     base_n = len(_dedupe(articles))
     deduped = merge_articles_with_sightings(
@@ -720,4 +733,6 @@ def fetch_history_days(
         "hit_page_cap": hit_page_cap,
         "merged_sightings": merged_extra,
         "__biz": biz,
+        "start_offset": max(0, int(start_offset)),
+        "next_offset": offset,
     }

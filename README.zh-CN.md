@@ -14,6 +14,9 @@
   捕获短暂客户端密钥 · 管理 30 分钟有效期 · 拉取近 7 / 30 / 90 天 / 全部 / 自定义天数历史 · 列表与正文多格式导出（HTML / Markdown / TXT / JSON / Word）· 批量导入（CSV/TXT）· 批量导出
 </p>
 
+> 本 fork 基于 Schinza 1.8.9，保留原有凭证捕获流程，并增加全历史跨重启续拉、
+> 大规模后台归档、SQLite 状态索引及与 `wechat_crawler` 的离线合并支持。
+
 <p align="center">
   <a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases"><img src="https://img.shields.io/badge/下载-Releases-22C55E?style=flat-square" alt="Download" /></a>
   <a href="#开源协议"><img src="https://img.shields.io/badge/License-MIT-3db89a?style=flat-square" alt="MIT License" /></a>
@@ -137,6 +140,36 @@ python3 -m venv .venv-mac
 5. **历史文章** → 选择 7 / 30 / 90 天 / 全部 / 自定义天数 → **拉取** → 导出列表或单篇正文  
 
 > 请优先「添加并抓包」。需要补充文章时可用「补录链接」。
+
+### 大量文章：后台归档全部（推荐）
+
+当日期范围内有几百或几千篇文章时，不要逐篇勾选：
+
+1. 在“历史文章”选择公众号和日期范围，例如 `2018-01-01` 至 `2026-12-31`。
+2. 点击拉取。单次达到 100 页上限时，按钮会变为“继续拉取下一批”；重复点击会从
+   `next_offset` 继续，并与已拉列表去重合并。历史目录与 offset 保存在本机
+   `data/history_cache.sqlite`，退出并重启 Schinza 后仍能续拉。
+3. 列表完成后点击 **后台归档全部**，选择归档目录。该功能忽略勾选状态，直接处理
+   当前完整列表；界面只预览前 200 篇，避免大量 Tk 卡片导致卡死。
+4. 正文采用最多 2 个 worker 的有界并发，每批之间随机等待 1.5–3.5 秒，并错开请求
+   启动时间。每篇成功后立即落盘；点击“停止归档”或意外退出后，再选择同一目录会
+   跳过已完成文章并续跑。不要自行提高到更高并发。
+
+归档目录结构：
+
+```text
+归档目录/
+├── manifest.json       # 完整文章目录，可用于 SQLite 离线合并
+├── manifest.jsonl      # 超大历史的流式目录；超过 1 万篇时以此为准
+├── articles/           # Markdown / HTML / TXT / JSON / Word 正文
+├── archive_index.sqlite# 大规模状态索引（WAL），快速判断已完成/失败
+├── job_state.jsonl     # 逐篇执行事件审计
+├── failures.jsonl      # 失败明细
+└── summary.json        # 本次执行汇总
+```
+
+遇到 `unknownerror`、HTTP 429 或“访问过于频繁”时，任务会立即暂停。请等待数小时到
+一天并刷新凭证后，再选择同一目录续跑；不要提高并发、连续重试或使用代理池。
 
 ---
 

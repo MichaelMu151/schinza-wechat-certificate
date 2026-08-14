@@ -32,6 +32,7 @@ from app.article_reader import (
     format_key_for_article_label,
     write_article_export,
 )
+from app.archive_job import run_archive_job
 from app.ca_setup import (
     PROXY_HOST,
     PROXY_PORT,
@@ -48,6 +49,7 @@ from app.credentials import (
 )
 from app.history_account_select import pick_label_for_account_id, resolve_account_id
 from app.history_client import describe_exception, fetch_history_days
+from app.history_cache import HistoryCache, make_query_key
 from app.history_export import (
     FORMAT_LABELS,
     default_export_filename,
@@ -278,6 +280,7 @@ class CertificateApp(ctk.CTk):
         self.root_dir = root_dir
         self.store = AccountStore(root_dir / "data" / "accounts.json")
         self.sightings = SightingsStore(default_sightings_path(root_dir))
+        self.history_cache = HistoryCache(root_dir / "data" / "history_cache.sqlite")
         self._pending_capture_id: str | None = None
         self._bulk_renew_remaining: set[str] = set()
         self._bulk_renew_total: int = 0
@@ -297,7 +300,13 @@ class CertificateApp(ctk.CTk):
         self._history_cancel = False
         self._article_exporting = False
         self._batch_exporting = False
+        self._archive_running = False
+        self._archive_cancel = False
         self._history_selected: set[str] = set()
+        self._history_query_signature: tuple[Any, ...] | None = None
+        self._history_next_offset = 0
+        self._history_cache_key = ""
+        self._history_cache_account_id = ""
         self._account_options: list[tuple[str, str]] = []  # (label, id)
         self._history_account_id: str | None = None
         self._nav_btns: dict[str, ctk.CTkButton] = {}
@@ -1004,6 +1013,19 @@ class CertificateApp(ctk.CTk):
             command=self.batch_export_selected,
         )
         self.batch_export_btn.pack(side="left", padx=(0, 14))
+
+        self.archive_all_btn = ctk.CTkButton(
+            batch_tools,
+            text="后台归档全部",
+            width=112,
+            height=32,
+            corner_radius=8,
+            fg_color=COLORS["border"],
+            hover_color="#3a4a5e",
+            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
+            command=self.archive_all_history,
+        )
+        self.archive_all_btn.pack(side="left")
 
         list_wrap = ctk.CTkFrame(self.hist_view, fg_color="transparent")
         list_wrap.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 8))
@@ -2516,6 +2538,26 @@ class CertificateApp(ctk.CTk):
         )
         name = str(row.get("name") or "")
         biz = str(cred.get("__biz") or row.get("biz") or "").strip()
+        signature: tuple[Any, ...] = (
+            account_id,
+            self._history_days,
+            self._history_range_iso,
+        )
+        if signature != self._history_query_signature:
+            query_key = make_query_key(
+                account_id,
+                days=self._history_days,
+                date_range=self._history_range_iso,
+            )
+            cached = self.history_cache.load(query_key)
+            self._history_articles = list(cached.get("articles") or [])
+            self._history_next_offset = (
+                0 if cached.get("complete") else int(cached.get("next_offset") or 0)
+            )
+            self._history_cache_key = query_key
+            self._history_cache_account_id = account_id
+        self._history_query_signature = signature
+        start_offset = self._history_next_offset
         self.sightings.load()
         sightings = self.sightings.list_for_biz(biz)
 
@@ -2538,9 +2580,16 @@ class CertificateApp(ctk.CTk):
                     should_cancel=lambda: self._history_cancel,
                     start_ts=start_ts,
                     end_ts=end_ts,
+                    start_offset=start_offset,
                 )
             except Exception as exc:  # noqa: BLE001
-                result = {"ok": False, "error": describe_exception(exc), "articles": []}
+                result = {
+                    "ok": False,
+                    "error": describe_exception(exc),
+                    "articles": [],
+                    "start_offset": start_offset,
+                    "next_offset": start_offset,
+                }
             self.after(0, lambda: self._on_history_done(name, result))
 
         threading.Thread(target=worker, name="schinza-history", daemon=True).start()
@@ -2550,17 +2599,41 @@ class CertificateApp(ctk.CTk):
         self.hist_fetch_btn.configure(
             state="normal", text=self._fetch_btn_label(), command=self.start_history_fetch
         )
-        if result.get("cancelled"):
-            self.set_hist_status(
-                f"已取消拉取（已展示部分结果 {len(list(result.get('articles') or []))} 篇）",
-                ok=False,
+        fetched_articles = list(result.get("articles") or [])
+        complete = bool(result.get("ok") and not result.get("hit_page_cap"))
+        next_offset = 0 if complete else int(result.get("next_offset") or 0)
+        if self._history_cache_key and self._history_cache_account_id:
+            self.history_cache.save_batch(
+                self._history_cache_key,
+                account_id=self._history_cache_account_id,
+                account_name=account_name,
+                days=self._history_days,
+                date_range=self._history_range_iso,
+                articles=fetched_articles,
+                next_offset=next_offset,
+                complete=complete,
             )
-            return
-        articles = list(result.get("articles") or [])
+            cached = self.history_cache.load(self._history_cache_key)
+            articles = list(cached.get("articles") or [])
+            self._history_next_offset = (
+                0 if cached.get("complete") else int(cached.get("next_offset") or 0)
+            )
+        else:
+            articles = fetched_articles
+            self._history_next_offset = next_offset
         self._history_articles = articles
         self._history_account_name = account_name
         self._history_selected.clear()
         self._render_history_list()
+        if self._history_next_offset:
+            self.hist_fetch_btn.configure(text="继续拉取下一批")
+        if result.get("cancelled"):
+            self.set_hist_status(
+                f"已取消拉取；缓存已保存，共保留 {len(articles)} 篇。"
+                "下次选择相同账号和范围可续拉。",
+                ok=False,
+            )
+            return
         if not result.get("ok"):
             self.set_hist_status(
                 f"拉取失败：{result.get('error') or '未知错误'}（已展示部分结果 {len(articles)} 篇）"
@@ -2627,7 +2700,26 @@ class CertificateApp(ctk.CTk):
                 font=ctk.CTkFont(family=UI_FONT, size=13),
             ).grid(row=0, column=0, pady=40)
             return
-        for i, art in enumerate(self._history_articles):
+        # Creating thousands of full Tk cards blocks the UI for minutes.  Keep
+        # the complete data in memory for exports, but render only a preview.
+        preview_limit = 200
+        visible = self._history_articles[:preview_limit]
+        row_offset = 0
+        if len(self._history_articles) > preview_limit:
+            ctk.CTkLabel(
+                self.hist_list,
+                text=(
+                    f"共 {len(self._history_articles)} 篇；为保持界面流畅，"
+                    f"这里只预览前 {preview_limit} 篇。可直接点击“后台归档全部”。"
+                ),
+                text_color=COLORS["warn"],
+                font=ctk.CTkFont(family=UI_FONT, size=12),
+                anchor="w",
+                justify="left",
+                wraplength=720,
+            ).grid(row=0, column=0, sticky="ew", pady=(0, 12))
+            row_offset = 1
+        for i, art in enumerate(visible):
             card = ctk.CTkFrame(
                 self.hist_list,
                 fg_color=COLORS["card"],
@@ -2635,7 +2727,7 @@ class CertificateApp(ctk.CTk):
                 border_width=1,
                 border_color=COLORS["border"],
             )
-            card.grid(row=i, column=0, sticky="ew", pady=(0, 12))
+            card.grid(row=i + row_offset, column=0, sticky="ew", pady=(0, 12))
             card.grid_columnconfigure(1, weight=1)
 
             key = self._article_key(art)
@@ -3027,7 +3119,7 @@ class CertificateApp(ctk.CTk):
         return key
 
     def export_article(self, art: dict[str, Any], *, fmt: str) -> None:
-        if self._article_exporting or self._batch_exporting:
+        if self._article_exporting or self._batch_exporting or self._archive_running:
             self.set_hist_status("正在导出中，请稍候…", ok=False)
             return
         link = str(art.get("link") or "").strip()
@@ -3087,8 +3179,126 @@ class CertificateApp(ctk.CTk):
             return
         self.set_hist_status(f"已导出 {ext.upper()} → {path}", ok=True)
 
-    def batch_export_selected(self) -> None:
+    def archive_all_history(self) -> None:
+        """Archive every fetched article without building/using a selection."""
+        if self._archive_running:
+            self._archive_cancel = True
+            self.archive_all_btn.configure(state="disabled", text="正在停止…")
+            self.set_hist_status("正在安全停止；已完成文章会保留，下次可续跑。", ok=False)
+            return
         if self._batch_exporting or self._article_exporting:
+            self.set_hist_status("已有导出任务正在运行，请稍候。", ok=False)
+            return
+        if not self._history_articles:
+            self.set_hist_status("没有可归档的文章，请先拉取历史列表。", ok=False)
+            return
+
+        safe_account = re.sub(
+            r'[\\/:*?"<>|]+', "_", self._history_account_name or "公众号"
+        )[:60]
+        default_dir = self.root_dir / "data" / "archives" / safe_account
+        default_dir.mkdir(parents=True, exist_ok=True)
+        dir_str = filedialog.askdirectory(
+            parent=self,
+            title=f"选择归档目录（全部 {len(self._history_articles)} 篇，可续跑）",
+            initialdir=str(default_dir),
+        )
+        if not dir_str:
+            return
+
+        fmt_key = self._resolve_article_fmt(self.article_fmt_menu.get())
+        label = ARTICLE_EXPORT_FORMATS.get(fmt_key, fmt_key)
+        cred = dict(self._history_cred or {})
+        self._archive_running = True
+        self._archive_cancel = False
+        self.archive_all_btn.configure(text="停止归档", state="normal")
+        self.batch_export_btn.configure(state="disabled")
+        self.set_hist_status(
+            f"后台归档全部 {len(self._history_articles)} 篇为 {label}；"
+            "最多 2 个错峰 worker，可安全停止并续跑。",
+            ok=True,
+        )
+
+        def progress(event: dict[str, Any]) -> None:
+            current = int(event.get("current") or 0)
+            total = int(event.get("total") or 0)
+            ok_n = int(event.get("ok") or 0)
+            failed_n = int(event.get("failed") or 0)
+            skipped_n = int(event.get("skipped") or 0)
+            title = str(event.get("title") or "")[:30]
+            self.after(
+                0,
+                lambda: self.set_hist_status(
+                    f"后台归档 {current}/{total} · 本次成功 {ok_n} · "
+                    f"失败 {failed_n} · 已有跳过 {skipped_n} · {title}",
+                    ok=True,
+                ),
+            )
+
+        def worker() -> None:
+            err = ""
+            try:
+                result = run_archive_job(
+                    list(self._history_articles),
+                    account_name=self._history_account_name,
+                    out_dir=Path(dir_str),
+                    fmt=fmt_key,
+                    cred=cred or None,
+                    on_progress=progress,
+                    should_cancel=lambda: self._archive_cancel,
+                    sleep_min_s=1.5,
+                    sleep_max_s=3.5,
+                )
+            except Exception as exc:  # noqa: BLE001
+                result = {
+                    "total": len(self._history_articles),
+                    "ok": 0,
+                    "failed": 0,
+                    "skipped": 0,
+                    "out_dir": dir_str,
+                }
+                err = describe_exception(exc)
+            self.after(0, lambda: self._on_archive_done(result, err, label))
+
+        threading.Thread(
+            target=worker, name="schinza-whole-archive", daemon=True
+        ).start()
+
+    def _on_archive_done(
+        self, result: dict[str, Any], err: str, label: str
+    ) -> None:
+        self._archive_running = False
+        self._archive_cancel = False
+        self.archive_all_btn.configure(state="normal", text="后台归档全部")
+        self.batch_export_btn.configure(state="normal")
+        if err:
+            self.set_hist_status(f"后台归档异常：{err}", ok=False)
+            return
+        ok_n = int(result.get("ok") or 0)
+        failed_n = int(result.get("failed") or 0)
+        skipped_n = int(result.get("skipped") or 0)
+        out = str(result.get("out_dir") or "")
+        if result.get("paused_rate_limit"):
+            self.set_hist_status(
+                f"检测到微信频控，已暂停归档：本次成功 {ok_n}、失败 {failed_n}、"
+                f"已有跳过 {skipped_n}。等待后选择同一目录即可续跑 → {out}",
+                ok=False,
+            )
+        elif result.get("cancelled"):
+            self.set_hist_status(
+                f"已安全停止：本次成功 {ok_n}、已有跳过 {skipped_n}。"
+                f"选择同一目录可续跑 → {out}",
+                ok=True,
+            )
+        else:
+            self.set_hist_status(
+                f"后台归档完成（{label}）：本次成功 {ok_n} · 失败 {failed_n} · "
+                f"已有跳过 {skipped_n} → {out}",
+                ok=failed_n == 0,
+            )
+
+    def batch_export_selected(self) -> None:
+        if self._batch_exporting or self._article_exporting or self._archive_running:
             self.set_hist_status("正在导出中，请稍候…", ok=False)
             return
         if not self._history_articles:

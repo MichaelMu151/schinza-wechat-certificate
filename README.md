@@ -14,6 +14,10 @@
   Capture short-lived MP keys · 30‑minute TTL · Fetch 7 / 30 / 90‑day, all, or custom‑day history · Export list &amp; full articles (HTML / Markdown / TXT / JSON / Word) · Batch import (CSV/TXT) · Batch export
 </p>
 
+> This fork is based on Schinza 1.8.9. It preserves the original credential
+> capture flow and adds cross-restart full-history paging, scalable background
+> archiving, SQLite state indexes, and offline `wechat_crawler` integration.
+
 <p align="center">
   <a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases"><img src="https://img.shields.io/badge/Download-Releases-22C55E?style=flat-square" alt="Download" /></a>
   <a href="#license"><img src="https://img.shields.io/badge/License-MIT-3db89a?style=flat-square" alt="MIT License" /></a>
@@ -137,6 +141,26 @@ python3 -m venv .venv-mac
 5. **History Articles** → pick range (7 / 30 / 90 days, all, or custom days) → **Fetch** → export list or per-article body  
 
 > Prefer **Add & Capture** over starting the proxy alone. Use **补录链接** when you need to add a missing article.
+
+### Large histories: resumable whole-account archive
+
+For hundreds or thousands of articles, choose the date range, fetch the history,
+then click **后台归档全部**. No per-article selection is required. The UI renders
+only the first 200 cards while the full list remains available to the archive job.
+
+The archive uses at most two bounded workers, staggers request starts, and waits
+a randomized 1.5–3.5 seconds between batches. Every successful article is
+written immediately. Re-select the same directory to resume; completed files
+are indexed by `archive_index.sqlite`. The directory also contains
+`manifest.json`, streaming `manifest.jsonl`, `articles/`, `job_state.jsonl`,
+`failures.jsonl`, and `summary.json`.
+
+If a history fetch reaches its 100-page batch limit, click
+**继续拉取下一批** to continue from `next_offset`. History rows and checkpoints
+are persisted in `data/history_cache.sqlite`, including across app restarts.
+If WeChat returns
+`unknownerror`, HTTP 429, or a rate-limit page, stop and wait before resuming.
+Do not increase concurrency or repeatedly retry.
 
 ---
 
