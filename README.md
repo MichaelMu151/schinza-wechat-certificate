@@ -138,13 +138,20 @@ python3 -m venv .venv-mac
 ### Confirm the scalable version
 
 The source entry point remains `main.py`. On the History page the primary
-button is **拉取并归档正文**. There are no article cards or checkboxes; the UI
-shows article count, pages, elapsed time, and body progress. One click pages
-automatically and then archives bodies to `data/archives/<account>/`.
+button is **拉取列表并归档** while credentials are valid, or **继续归档正文**
+after they expire. There are no article cards or checkboxes; the UI shows
+article count, pages, elapsed time, and body progress.
+
+The 30-minute `uin`/`key` window is used **only to page getmsg**. Public
+article HTML does not need those keys, so body downloads never compete with
+listing. If the window ends before the list is complete, the URLs stay in
+`data/history_cache.sqlite` — renew immediately and click again to keep
+paging. After the list is complete (or after expiry, via **继续归档正文**),
+bodies are written to `data/archives/<account>/` without credentials.
 
 ```bash
 .venv-mac/bin/python -c "from app import __version__; print(__version__)"
-# 1.9.1
+# 1.9.2
 ```
 
 ### First-time capture flow
@@ -153,7 +160,7 @@ automatically and then archives bodies to `data/archives/<account>/`.
 2. Account name + any article URL → **Add & Capture**; or use **Batch Import** to load a CSV/TXT (column 1 = OA name, column 2 = article URL; comma/tab separated, header auto-detected)  
 3. Open any article from that OA in WeChat Desktop  
 4. Credentials appear (30‑minute TTL). **Renew** does not open a system browser — refresh the already-open article in WeChat; multi-OA traffic is routed by `__biz`  
-5. **History Articles** → pick the account (default: all history) → **拉取并归档正文**. Paging and body downloads run automatically. No selection is required.
+5. **History Articles** → pick the account (default: all history) → **拉取列表并归档** while the 30-minute window is live. Listing runs automatically. Bodies start only after the list is complete, or later via **继续归档正文** once credentials expire. No selection is required.
 
 ### Conservative body downloads
 

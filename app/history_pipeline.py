@@ -1,9 +1,10 @@
 """List-then-archive pipeline with no GUI widgets.
 
-Paging continues automatically while WeChat still advances ``next_offset``.
-Article bodies are written immediately after the list is as complete as this
-session can make it.  The same output directory can be reused to skip files
-already archived.
+getmsg listing needs the ~30-minute ``uin``/``key`` window.  Article HTML does
+not, so this pipeline spends that window on paging only.  Bodies start after
+the list is complete, or when the caller explicitly skips listing (expired
+credentials + cached URLs).  The same output directory can be reused to skip
+files already archived.
 """
 
 from __future__ import annotations
@@ -18,6 +19,7 @@ from app.history_client import fetch_history_days
 
 ProgressCallback = Callable[[dict[str, Any]], None]
 CancelCallback = Callable[[], bool]
+NowCallback = Callable[[], float]
 
 
 def _scope_label(
@@ -46,15 +48,22 @@ def run_list_and_archive(
     should_cancel: CancelCallback | None = None,
     max_pages_per_batch: int = 100,
     batch_pause_s: float = 1.0,
+    skip_listing: bool = False,
+    cred_deadline_ts: float | None = None,
     fetch_history: Callable[..., dict[str, Any]] | None = None,
     archive: Callable[..., dict[str, Any]] | None = None,
+    time_fn: NowCallback | None = None,
 ) -> dict[str, Any]:
-    """Fetch every history page, then archive every article body.
+    """List while credentials last; archive only when the list is ready.
 
-    Does not create Tk widgets.  Pagination authority remains advancing
-    ``next_offset``; ``can_msg_continue=false`` is not treated as completion.
+    Listing uses the 30-minute getmsg window.  Article HTML does not need
+    ``uin``/``key``, and expired cookies can even break public pages, so body
+    fetches run without credentials.  If the window ends before the list is
+    complete, URLs stay in cache and bodies wait for an explicit skip-listing
+    run so the next capture can keep paging.
     """
 
+    now = time_fn or time.time
     fetch = fetch_history or fetch_history_days
     archive_fn = archive or run_archive_job
     query_key = make_query_key(account_id, days=days, date_range=date_range)
@@ -63,7 +72,7 @@ def run_list_and_archive(
     offset = 0 if cached.get("complete") else int(cached.get("next_offset") or 0)
     listing_complete = bool(cached.get("complete"))
     pages = 0
-    t0 = time.time()
+    t0 = now()
     listing_error = ""
     pagination_stalled = False
     cancelled = False
@@ -74,19 +83,26 @@ def run_list_and_archive(
                 {
                     "articles": len(articles),
                     "pages": pages,
-                    "elapsed_s": int(time.time() - t0),
+                    "elapsed_s": int(now() - t0),
                     "scope": _scope_label(days, date_range),
                     "out_dir": str(out_dir),
                     **payload,
                 }
             )
 
-    if listing_complete:
+    def listing_time_up() -> bool:
+        return cred_deadline_ts is not None and now() >= float(cred_deadline_ts)
+
+    if skip_listing or listing_complete:
         emit(
             {
                 "stage": "listing",
                 "status": "cached",
-                "title": "列表已在本地缓存中，直接归档正文",
+                "title": (
+                    "跳过列表，直接归档已缓存正文"
+                    if skip_listing
+                    else "列表已在本地缓存中，直接归档正文"
+                ),
             }
         )
     else:
@@ -94,6 +110,16 @@ def run_list_and_archive(
             if should_cancel and should_cancel():
                 cancelled = True
                 listing_error = "已取消"
+                break
+            if listing_time_up():
+                listing_error = "凭证窗口即将结束，列表已缓存；请续约后继续拉列表。"
+                emit(
+                    {
+                        "stage": "listing",
+                        "status": "cred_window",
+                        "title": listing_error,
+                    }
+                )
                 break
             emit(
                 {
@@ -155,7 +181,7 @@ def run_list_and_archive(
         "scope": _scope_label(days, date_range),
         "articles": len(articles),
         "pages": pages,
-        "elapsed_s": int(time.time() - t0),
+        "elapsed_s": int(now() - t0),
         "listing_complete": listing_complete,
         "pagination_stalled": pagination_stalled,
         "listing_error": listing_error,
@@ -176,11 +202,25 @@ def run_list_and_archive(
         )
         return summary
 
+    # Bodies do not need the 30-minute window.  Do not start a multi-hour
+    # download while the list is still incomplete: the next capture should
+    # keep paging.  Expired-credential runs pass skip_listing=True.
+    if not (skip_listing or listing_complete):
+        emit(
+            {
+                "stage": "done",
+                "status": "list_paused",
+                "title": listing_error
+                or "列表未拉完，已写入缓存。请续约后继续拉列表；正文可在凭证过期后单独归档。",
+            }
+        )
+        return summary
+
     emit(
         {
             "stage": "archiving",
             "status": "archiving",
-            "title": f"列表 {len(articles)} 篇，开始拉取正文",
+            "title": f"列表 {len(articles)} 篇，开始拉取正文（不使用凭证）",
         }
     )
     archive_result = archive_fn(
@@ -188,7 +228,7 @@ def run_list_and_archive(
         account_name=account_name,
         out_dir=out_dir,
         fmt=fmt,
-        cred=cred,
+        cred=None,
         on_progress=lambda event: emit(
             {
                 "stage": "archiving",
@@ -205,7 +245,7 @@ def run_list_and_archive(
         should_cancel=should_cancel,
     )
     summary["archive"] = archive_result
-    summary["elapsed_s"] = int(time.time() - t0)
+    summary["elapsed_s"] = int(now() - t0)
     if archive_result.get("cancelled"):
         summary["cancelled"] = True
         emit({"stage": "cancelled", "status": "cancelled", "title": "已停止正文归档"})

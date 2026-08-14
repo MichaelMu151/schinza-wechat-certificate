@@ -163,6 +163,23 @@ class AccountStore:
         row = self.get(account_id)
         return bool(row and row.get("status") == "active" and self.remaining_seconds(account_id) > 0)
 
+    def list_history_accounts(self) -> list[dict[str, Any]]:
+        """Active first, then expired accounts that still have captured identity."""
+        self.mark_expired_if_needed()
+        active = self.list_active_accounts()
+        seen = {str(row.get("id")) for row in active}
+        expired: list[dict[str, Any]] = []
+        with self._lock:
+            for row in self._accounts:
+                aid = str(row.get("id") or "")
+                if not aid or aid in seen:
+                    continue
+                cred = row.get("credentials") or {}
+                if not (row.get("biz") or cred.get("__biz")):
+                    continue
+                expired.append(deepcopy(row))
+        return active + expired
+
     def list_active_accounts(self) -> list[dict[str, Any]]:
         self.mark_expired_if_needed()
         with self._lock:

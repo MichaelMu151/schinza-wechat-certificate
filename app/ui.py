@@ -45,7 +45,7 @@ from app.credentials import (
 )
 from app.history_account_select import pick_label_for_account_id, resolve_account_id
 from app.history_client import describe_exception
-from app.history_cache import HistoryCache
+from app.history_cache import HistoryCache, make_query_key
 from app.history_ranges import (
     ALL_LABEL,
     CUSTOM_DAYS_DEFAULT,
@@ -784,7 +784,7 @@ class CertificateApp(ctk.CTk):
 
         ctk.CTkLabel(
             panel,
-            text="选择已抓到凭证的公众号后，一键拉取全部历史列表并自动归档正文。不勾选、不渲染文章卡片。",
+            text="凭证约 30 分钟，只用于拉列表。列表拉完后才下正文（正文不消耗凭证）。窗口结束而列表未完时请先续约；过期后可点「继续归档正文」。",
             font=ctk.CTkFont(family=UI_FONT, size=12),
             text_color=COLORS["muted"],
             anchor="w",
@@ -835,7 +835,7 @@ class CertificateApp(ctk.CTk):
         self.hist_fetch_btn = ctk.CTkButton(
             panel,
             text=self._fetch_btn_label(),
-            width=148,
+            width=168,
             height=36,
             corner_radius=10,
             fg_color=COLORS["accent"],
@@ -882,7 +882,7 @@ class CertificateApp(ctk.CTk):
 
         self.hist_status = ctk.CTkLabel(
             panel,
-            text="默认拉取全部历史。点击一次后会自动翻页并开始归档正文。",
+            text="有效凭证：冲列表。过期后点同一账号即可只补正文，不必重新抓包。",
             text_color=COLORS["muted"],
             font=ctk.CTkFont(family=UI_FONT, size=12),
             anchor="w",
@@ -1987,19 +1987,23 @@ class CertificateApp(ctk.CTk):
     # ── history tab ───────────────────────────────────────────────────
 
     def refresh_history_account_options(self) -> None:
-        active = self.store.list_active_accounts()
+        rows = self.store.list_history_accounts()
         prev_label = self.hist_account_menu.get()
         options: list[tuple[str, str]] = []
         labels: list[str] = []
-        for row in active:
+        for row in rows:
             aid = str(row["id"])
             remain = self.store.remaining_seconds(aid)
-            label = f"{row.get('name') or '未命名'}（剩余 {_fmt_remain(remain)}）"
+            name = str(row.get("name") or "未命名")
+            if self.store.is_active(aid):
+                label = f"{name}（列表窗口剩余 {_fmt_remain(remain)}）"
+            else:
+                label = f"{name}（凭证已过期，可继续归档正文）"
             options.append((label, aid))
             labels.append(label)
         self._account_options = options
         if not labels:
-            labels = ["（暂无有效凭证）"]
+            labels = ["（暂无已抓包公众号）"]
             self._history_account_id = None
             self.hist_account_menu.configure(values=labels)
             self.hist_account_menu.set(labels[0])
@@ -2039,7 +2043,10 @@ class CertificateApp(ctk.CTk):
         )
 
     def _fetch_btn_label(self) -> str:
-        return "拉取并归档正文"
+        account_id = self._selected_history_account_id()
+        if account_id and not self.store.is_active(account_id):
+            return "继续归档正文"
+        return "拉取列表并归档"
 
     def _history_range_label(self) -> str:
         """当前选择对应的下拉框文案（自定义值显示为「自定义 N 天」）。"""
@@ -2461,15 +2468,12 @@ class CertificateApp(ctk.CTk):
         self.refresh_history_account_options()
         account_id = self._selected_history_account_id()
         if not account_id:
-            self.set_hist_status("没有可用的有效凭证。请先在「凭证管理」抓取凭证。", ok=False)
-            return
-        if not self.store.is_active(account_id):
-            self.set_hist_status("所选公众号凭证已过期，请先续约。", ok=False)
-            self.refresh_history_account_options()
+            self.set_hist_status("没有可处理的公众号。请先在「凭证管理」抓取凭证。", ok=False)
             return
         row = self.store.get(account_id)
         if not row:
             return
+        cred_active = self.store.is_active(account_id)
         cred = dict(row.get("credentials") or {})
         if not cred.get("__biz") and row.get("biz"):
             cred["__biz"] = row["biz"]
@@ -2485,14 +2489,43 @@ class CertificateApp(ctk.CTk):
             end_ts = _iso_date_to_ts(self._history_range_iso[1], end_of_day=True)
         self.sightings.load()
         sightings = self.sightings.list_for_biz(str(cred.get("__biz") or row.get("biz") or ""))
+        remain = self.store.remaining_seconds(account_id) if cred_active else 0
+        # Leave a buffer so getmsg does not start a new page after expiry.
+        # If little time remains, still try a few pages instead of skipping listing.
+        cred_deadline_ts = None
+        if cred_active:
+            buffer_s = 90 if remain >= 120 else min(15, max(0, remain - 5))
+            cred_deadline_ts = time.time() + max(0, remain - buffer_s)
+        skip_listing = not cred_active
+        if skip_listing:
+            cached = self.history_cache.load(
+                make_query_key(
+                    account_id,
+                    days=self._history_days,
+                    date_range=self._history_range_iso,
+                )
+            )
+            if not cached.get("articles"):
+                self.set_hist_status(
+                    "凭证已过期且没有已缓存的历史列表。请先续约，用有效窗口把列表拉完。",
+                    ok=False,
+                )
+                return
         self._history_fetching = True
         self._history_cancel = False
         self._history_cred = cred
         self._history_account_name = name
         self.hist_fetch_btn.configure(text="停止", state="normal")
         self.hist_stat_dir.configure(text=f"目录：{out_dir}")
-        self.set_hist_status("正在后台拉取列表并自动归档正文…", ok=True)
-        self._append_hist_log(f"开始「{name}」→ {out_dir}")
+        if skip_listing:
+            self.set_hist_status("凭证已过期，正在仅归档已缓存列表的正文…", ok=True)
+            self._append_hist_log(f"仅归档「{name}」→ {out_dir}")
+        else:
+            self.set_hist_status(
+                f"凭证剩余 {_fmt_remain(remain)}：本窗口只拉列表；拉完后再下正文。",
+                ok=True,
+            )
+            self._append_hist_log(f"开始「{name}」列表窗口 {_fmt_remain(remain)} → {out_dir}")
 
         def worker() -> None:
             err = ""
@@ -2509,6 +2542,8 @@ class CertificateApp(ctk.CTk):
                     sightings=sightings,
                     out_dir=out_dir,
                     fmt=fmt_key,
+                    skip_listing=skip_listing,
+                    cred_deadline_ts=cred_deadline_ts,
                     on_progress=lambda event: self.after(
                         0, lambda e=dict(event): self._update_pipeline_progress(e)
                     ),
@@ -2562,10 +2597,26 @@ class CertificateApp(ctk.CTk):
             )
             return
         listing_error = str(result.get("listing_error") or "").strip()
+        listing_complete = bool(result.get("listing_complete"))
+        if listing_error and "凭证窗口即将结束" in listing_error:
+            self.set_hist_status(
+                f"凭证窗口结束，列表已缓存 {articles} 篇（尚未拉完）。"
+                "请立即续约后点「拉取列表并归档」继续翻页；"
+                "正文不需要凭证，也可等过期后点「继续归档正文」。",
+                ok=True,
+            )
+            return
         if listing_error:
             self.set_hist_status(
-                f"列表未拉完（{listing_error}）。已归档已有 {articles} 篇。"
+                f"列表未拉完（{listing_error}）。已缓存 {articles} 篇。"
                 "刷新凭证后同一账号再点一次会续拉。",
+                ok=False,
+            )
+            return
+        if not listing_complete and not archive:
+            self.set_hist_status(
+                f"列表未拉完，已缓存 {articles} 篇 · {pages} 页 · {elapsed}s。"
+                "请续约后继续拉列表。",
                 ok=False,
             )
             return
@@ -2634,8 +2685,7 @@ class CertificateApp(ctk.CTk):
         else:
             self.proxy_btn.configure(text="手动启停代理")
         if self._tab == "history" and not self._history_fetching:
-            # keep countdown labels in dropdown reasonably fresh
-            pass
+            self.hist_fetch_btn.configure(text=self._fetch_btn_label())
         self.after(1000, self._tick)
 
     def _on_close(self) -> None:
