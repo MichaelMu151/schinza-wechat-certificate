@@ -93,3 +93,53 @@ def test_archive_pauses_immediately_on_rate_limit(tmp_path: Path) -> None:
     assert result["failed"] == 1
     failures = (tmp_path / "failures.jsonl").read_text(encoding="utf-8")
     assert "429" in failures
+
+
+def test_archive_pauses_on_wechat_rate_limit_page(tmp_path: Path) -> None:
+    def fetch(_url: str, **_kwargs):
+        return {"title": "unknownerror", "content_text": "访问过于频繁"}
+
+    result = run_archive_job(
+        _articles(),
+        account_name="测试医院",
+        out_dir=tmp_path,
+        fetch_article=fetch,
+        sleep_min_s=0,
+        sleep_max_s=0,
+        max_workers=1,
+    )
+    assert result["paused_rate_limit"] is True
+    assert result["failed"] == 1
+
+
+def test_archive_retries_transient_failures_before_recording_success(tmp_path: Path) -> None:
+    attempts = 0
+
+    def fetch(url: str, **_kwargs):
+        nonlocal attempts
+        attempts += 1
+        if attempts == 1:
+            raise requests.ConnectionError("temporary connection reset")
+        return {
+            "title": "正文",
+            "source_url": url,
+            "content_text": "内容",
+            "content_markdown": "内容",
+        }
+
+    result = run_archive_job(
+        _articles()[:1],
+        account_name="测试医院",
+        out_dir=tmp_path,
+        fetch_article=fetch,
+        sleep_min_s=0,
+        sleep_max_s=0,
+        retry_backoff_s=(0, 0),
+        cooldown_range_s=(0, 0),
+        max_workers=2,
+    )
+    assert attempts == 2
+    assert result["ok"] == 1
+    assert result["failed"] == 0
+    assert result["retries"] == 1
+    assert result["max_workers"] == 1

@@ -11,7 +11,6 @@ import json
 import random
 import sqlite3
 import time
-from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -181,7 +180,14 @@ def _looks_rate_limited(parsed: dict[str, Any]) -> bool:
     ).lower()
     return any(
         marker in sample
-        for marker in ("访问过于频繁", "操作频繁", "too many requests", "rate limit")
+        for marker in (
+            "访问过于频繁",
+            "请求过于频繁",
+            "操作频繁",
+            "unknownerror",
+            "too many requests",
+            "rate limit",
+        )
     )
 
 
@@ -197,6 +203,30 @@ def _is_rate_limit_error(exc: Exception) -> bool:
     )
 
 
+def _is_transient_error(exc: Exception) -> bool:
+    """Return whether a short retry is safer than recording a final failure."""
+    if _is_rate_limit_error(exc):
+        return False
+    if isinstance(exc, requests.exceptions.RequestException):
+        return True
+    text = str(exc).lower()
+    return any(
+        marker in text
+        for marker in (
+            "timeout",
+            "timed out",
+            "connection",
+            "reset",
+            "temporarily unavailable",
+            "bad gateway",
+            "service unavailable",
+            "502",
+            "503",
+            "504",
+        )
+    )
+
+
 def run_archive_job(
     articles: list[dict[str, Any]],
     *,
@@ -207,11 +237,19 @@ def run_archive_job(
     fetch_article: Callable[..., dict[str, Any]] | None = None,
     on_progress: ProgressCallback | None = None,
     should_cancel: CancelCallback | None = None,
-    sleep_min_s: float = 1.5,
-    sleep_max_s: float = 3.5,
-    max_workers: int = 2,
+    sleep_min_s: float = 8.0,
+    sleep_max_s: float = 15.0,
+    max_workers: int = 1,
+    transient_retries: int = 2,
+    retry_backoff_s: tuple[float, float] = (12.0, 30.0),
+    cooldown_after_failures: int = 3,
+    cooldown_range_s: tuple[float, float] = (60.0, 120.0),
 ) -> dict[str, Any]:
-    """Archive with small bounded concurrency and a durable SQLite resume index."""
+    """Archive sequentially with conservative pacing and resumable retries.
+
+    WeChat article pages are sensitive to request bursts.  ``max_workers`` is
+    retained for caller compatibility but deliberately capped at one.
+    """
 
     output = Path(out_dir)
     article_dir = output / "articles"
@@ -238,8 +276,9 @@ def run_archive_job(
     fetch = fetch_article or fetch_and_parse_article
     ext = extension_for_article_format(fmt)
     total = len(articles)
-    completed = failed = skipped = 0
+    completed = failed = skipped = retries = 0
     paused = cancelled = False
+    consecutive_failures = 0
 
     pending: list[tuple[int, dict[str, Any], str, str, str]] = []
     for index, row in enumerate(articles, start=1):
@@ -280,25 +319,94 @@ def run_archive_job(
 
     def fetch_one(
         entry: tuple[int, dict[str, Any], str, str, str]
-    ) -> dict[str, Any]:
+    ) -> tuple[dict[str, Any], int]:
         _index, _row, _identity, _title, link = entry
-        parsed = fetch(link, cred=cred)
-        if _looks_rate_limited(parsed):
-            raise RuntimeError("微信返回访问过于频繁页面")
-        return parsed
+        attempts = 0
+        while True:
+            try:
+                parsed = fetch(link, cred=cred)
+                if _looks_rate_limited(parsed):
+                    raise RuntimeError("微信返回访问过于频繁页面")
+                return parsed, attempts
+            except Exception as exc:
+                if (
+                    attempts >= max(0, int(transient_retries))
+                    or not _is_transient_error(exc)
+                    or (should_cancel and should_cancel())
+                ):
+                    raise
+                attempts += 1
+                low, high = retry_backoff_s
+                low = max(0.0, float(low)) * attempts
+                high = max(low, float(high) * attempts)
+                time.sleep(random.uniform(low, high))
 
-    worker_count = min(max(1, int(max_workers)), 4)
-    with ThreadPoolExecutor(
-        max_workers=worker_count, thread_name_prefix="schinza-archive"
-    ) as executor:
-        for batch_start in range(0, len(pending), worker_count):
-            if should_cancel and should_cancel():
-                cancelled = True
+    # Do not raise this cap: the old two-worker behavior caused request bursts.
+    worker_count = 1
+    for pending_index, entry in enumerate(pending):
+        if should_cancel and should_cancel():
+            cancelled = True
+            break
+        index, row, identity, title, link = entry
+        if on_progress:
+            on_progress(
+                {
+                    "current": index,
+                    "total": total,
+                    "ok": completed,
+                    "failed": failed,
+                    "skipped": skipped,
+                    "retries": retries,
+                    "title": title,
+                    "status": "fetching",
+                }
+            )
+        event_base = {
+            "time": datetime.now().isoformat(timespec="seconds"),
+            "identity": identity,
+            "index": index,
+            "title": title,
+            "link": link,
+        }
+        try:
+            parsed, used_retries = fetch_one(entry)
+            retries += used_retries
+            if not parsed.get("publish_at") and row.get("publish_at"):
+                parsed["publish_at"] = row.get("publish_at")
+            if not parsed.get("publish_ts") and row.get("publish_ts"):
+                parsed["publish_ts"] = row.get("publish_ts")
+            if not parsed.get("title") or parsed.get("title") == "(无标题)":
+                parsed["title"] = title
+            filename = safe_export_filename(
+                str(parsed.get("title") or title), ext=ext, index=index
+            )
+            path = write_article_export(article_dir / filename, parsed, fmt)
+            completed += 1
+            consecutive_failures = 0
+            event = {
+                **event_base,
+                "status": "ok",
+                "path": str(path),
+                "retries": used_retries,
+            }
+            _append_jsonl(state_path, event)
+            archive_index.record(identity, status="ok", path=str(path))
+        except Exception as exc:  # noqa: BLE001
+            failed += 1
+            consecutive_failures += 1
+            error = describe_exception(exc)
+            event = {**event_base, "status": "failed", "error": error}
+            _append_jsonl(state_path, event)
+            _append_jsonl(failure_path, event)
+            archive_index.record(identity, status="failed", error=error)
+            if _is_rate_limit_error(exc):
+                paused = True
                 break
-            batch = pending[batch_start : batch_start + worker_count]
-            futures = []
-            for entry in batch:
-                index, _row, _identity, title, _link = entry
+            if consecutive_failures >= max(1, int(cooldown_after_failures)):
+                low, high = cooldown_range_s
+                low = max(0.0, float(low))
+                high = max(low, float(high))
+                cooldown_s = random.uniform(low, high)
                 if on_progress:
                     on_progress(
                         {
@@ -307,59 +415,22 @@ def run_archive_job(
                             "ok": completed,
                             "failed": failed,
                             "skipped": skipped,
+                            "retries": retries,
                             "title": title,
-                            "status": "fetching",
+                            "status": "cooldown",
+                            "cooldown_s": int(cooldown_s),
                         }
                     )
-                futures.append((entry, executor.submit(fetch_one, entry)))
-                # Avoid an instantaneous request burst even with two workers.
-                if worker_count > 1 and len(futures) < len(batch):
-                    time.sleep(0.35)
-
-            for entry, future in futures:
-                index, row, identity, title, link = entry
-                event_base = {
-                    "time": datetime.now().isoformat(timespec="seconds"),
-                    "identity": identity,
-                    "index": index,
-                    "title": title,
-                    "link": link,
-                }
-                try:
-                    parsed = future.result()
-                    if not parsed.get("publish_at") and row.get("publish_at"):
-                        parsed["publish_at"] = row.get("publish_at")
-                    if not parsed.get("publish_ts") and row.get("publish_ts"):
-                        parsed["publish_ts"] = row.get("publish_ts")
-                    if not parsed.get("title") or parsed.get("title") == "(无标题)":
-                        parsed["title"] = title
-                    filename = safe_export_filename(
-                        str(parsed.get("title") or title), ext=ext, index=index
-                    )
-                    path = write_article_export(article_dir / filename, parsed, fmt)
-                    completed += 1
-                    event = {**event_base, "status": "ok", "path": str(path)}
-                    _append_jsonl(state_path, event)
-                    archive_index.record(identity, status="ok", path=str(path))
-                except Exception as exc:  # noqa: BLE001
-                    failed += 1
-                    error = describe_exception(exc)
-                    event = {**event_base, "status": "failed", "error": error}
-                    _append_jsonl(state_path, event)
-                    _append_jsonl(failure_path, event)
-                    archive_index.record(identity, status="failed", error=error)
-                    if _is_rate_limit_error(exc):
-                        paused = True
-            if paused:
-                break
-            if batch_start + worker_count < len(pending):
-                low = max(0.0, float(sleep_min_s))
-                high = max(low, float(sleep_max_s))
-                if high:
-                    time.sleep(random.uniform(low, high))
-            if should_cancel and should_cancel():
-                cancelled = True
-                break
+                time.sleep(cooldown_s)
+                consecutive_failures = 0
+        if pending_index + 1 < len(pending):
+            low = max(0.0, float(sleep_min_s))
+            high = max(low, float(sleep_max_s))
+            if high:
+                time.sleep(random.uniform(low, high))
+        if should_cancel and should_cancel():
+            cancelled = True
+            break
 
     if pending and not paused and not cancelled:
         # Report progress after the final batch even when there was no callback
@@ -383,6 +454,7 @@ def run_archive_job(
         "ok": completed,
         "failed": failed,
         "skipped": skipped,
+        "retries": retries,
         "paused_rate_limit": paused,
         "cancelled": cancelled,
         "out_dir": str(output),

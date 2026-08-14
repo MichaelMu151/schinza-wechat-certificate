@@ -2416,10 +2416,18 @@ class CertificateApp(ctk.CTk):
             ok_n = int(event.get("ok") or 0)
             failed_n = int(event.get("failed") or 0)
             skipped_n = int(event.get("skipped") or 0)
+            retries = int(event.get("retries") or 0)
             extra = f"{current}/{total} · " if total else ""
             self.hist_stat_body.configure(
-                text=f"正文：{extra}成功 {ok_n} · 失败 {failed_n} · 跳过 {skipped_n}"
+                text=(
+                    f"正文：{extra}成功 {ok_n} · 失败 {failed_n} · "
+                    f"跳过 {skipped_n} · 重试 {retries}"
+                )
             )
+            if stage == "archiving" and event.get("status") == "cooldown":
+                self._append_hist_log(
+                    f"[冷却] 连续失败，暂停 {int(event.get('cooldown_s') or 0)}s 后继续"
+                )
         elif stage == "listing":
             self.hist_stat_body.configure(text="正文：等待列表拉完后自动开始")
         out_dir = str(event.get("out_dir") or self._pipeline_out_dir or "")
@@ -2538,7 +2546,8 @@ class CertificateApp(ctk.CTk):
                 text=(
                     f"正文：成功 {int(archive.get('ok') or 0)} · "
                     f"失败 {int(archive.get('failed') or 0)} · "
-                    f"跳过 {int(archive.get('skipped') or 0)}"
+                    f"跳过 {int(archive.get('skipped') or 0)} · "
+                    f"重试 {int(archive.get('retries') or 0)}"
                 )
             )
         if out:

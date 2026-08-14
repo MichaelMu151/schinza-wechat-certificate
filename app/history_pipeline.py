@@ -197,6 +197,7 @@ def run_list_and_archive(
                 "ok": event.get("ok") or 0,
                 "failed": event.get("failed") or 0,
                 "skipped": event.get("skipped") or 0,
+                "retries": event.get("retries") or 0,
                 "current": event.get("current") or 0,
                 "total": event.get("total") or len(articles),
             }

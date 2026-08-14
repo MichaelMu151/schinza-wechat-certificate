@@ -155,6 +155,17 @@ automatically and then archives bodies to `data/archives/<account>/`.
 4. Credentials appear (30‑minute TTL). **Renew** does not open a system browser — refresh the already-open article in WeChat; multi-OA traffic is routed by `__biz`  
 5. **History Articles** → pick the account (default: all history) → **拉取并归档正文**. Paging and body downloads run automatically. No selection is required.
 
+### Conservative body downloads
+
+Body downloads use one request at a time with a randomized **8–15 second**
+interval. Transient network failures retry up to twice with increasing waits;
+three final failures in a row trigger a 1–2 minute cooldown. The progress view
+shows retries and cooldowns.
+
+This reduces request bursts but does not bypass WeChat risk controls. HTTP 429,
+`unknownerror`, and frequency-limit pages stop the job immediately. Wait hours
+to a day, refresh credentials, then run the same account again to resume.
+
 ---
 
 ## Troubleshooting (fetch errors)
