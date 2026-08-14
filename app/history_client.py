@@ -587,6 +587,7 @@ def fetch_history_days(
     sess = requests.Session()
     sess.trust_env = False
     hit_page_cap = False
+    pagination_stalled = False
     last_can_continue = False
     biz = str(cred.get("__biz") or "").strip()
 
@@ -685,6 +686,7 @@ def fetch_history_days(
             except Exception:
                 break
         if nxt_i <= offset:
+            pagination_stalled = True
             break
 
         offset = nxt_i
@@ -703,10 +705,11 @@ def fetch_history_days(
         deduped = [a for a in deduped if not (int(a.get("publish_ts") or 0) > upper_ts)]
 
     warn = ""
-    if hit_page_cap and last_can_continue:
-        warn = (
-            f"已达翻页上限 {page_limit} 页，{scope}可能仍有文章未拉完，请再点一次拉取续翻。"
-        )
+    if hit_page_cap:
+        warn = f"已达翻页上限 {page_limit} 页，{scope}可能仍有文章未拉完，请再点一次拉取续翻。"
+    if pagination_stalled:
+        stalled = "微信未返回递增的分页 offset；本批未标记为完成，请刷新凭证后重试当前页。"
+        warn = f"{warn} · {stalled}" if warn else stalled
     if merged_extra:
         extra = f"已合并补录/抓包 {merged_extra} 篇"
         warn = f"{warn} · {extra}" if warn else extra
@@ -728,6 +731,7 @@ def fetch_history_days(
         "start_ts": cutoff if range_mode else None,
         "end_ts": upper_ts if range_mode else None,
         "hit_page_cap": hit_page_cap,
+        "pagination_stalled": pagination_stalled,
         "merged_sightings": merged_extra,
         "__biz": biz,
         "start_offset": max(0, int(start_offset)),

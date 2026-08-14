@@ -2600,7 +2600,12 @@ class CertificateApp(ctk.CTk):
             state="normal", text=self._fetch_btn_label(), command=self.start_history_fetch
         )
         fetched_articles = list(result.get("articles") or [])
-        complete = bool(result.get("ok") and not result.get("hit_page_cap"))
+        pagination_stalled = bool(result.get("pagination_stalled"))
+        complete = bool(
+            result.get("ok")
+            and not result.get("hit_page_cap")
+            and not pagination_stalled
+        )
         next_offset = 0 if complete else int(result.get("next_offset") or 0)
         if self._history_cache_key and self._history_cache_account_id:
             self.history_cache.save_batch(
@@ -2625,8 +2630,10 @@ class CertificateApp(ctk.CTk):
         self._history_account_name = account_name
         self._history_selected.clear()
         self._render_history_list()
-        if self._history_next_offset:
+        if result.get("hit_page_cap"):
             self.hist_fetch_btn.configure(text="继续拉取下一批")
+        elif pagination_stalled:
+            self.hist_fetch_btn.configure(text="重新尝试当前页")
         if result.get("cancelled"):
             self.set_hist_status(
                 f"已取消拉取；缓存已保存，共保留 {len(articles)} 篇。"
@@ -2652,7 +2659,7 @@ class CertificateApp(ctk.CTk):
         msg = f"「{account_name}」{scope}共 {len(articles)} 篇（请求 {pages} 页）"
         if warn:
             msg = f"{msg} · {warn}"
-        self.set_hist_status(msg, ok=True)
+        self.set_hist_status(msg, ok=None if (result.get("hit_page_cap") or pagination_stalled) else True)
 
     def _render_history_text(self) -> tuple[str, str]:
         """Return (format_label, rendered text)."""
