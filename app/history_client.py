@@ -706,10 +706,7 @@ def fetch_history_days(
 
     warn = ""
     if hit_page_cap:
-        warn = f"已达翻页上限 {page_limit} 页，{scope}可能仍有文章未拉完，请再点一次拉取续翻。"
-    if pagination_stalled:
-        stalled = "微信未返回递增的分页 offset；本批未标记为完成，请刷新凭证后重试当前页。"
-        warn = f"{warn} · {stalled}" if warn else stalled
+        warn = f"已达本批翻页上限 {page_limit} 页，将自动继续拉取。"
     if merged_extra:
         extra = f"已合并补录/抓包 {merged_extra} 篇"
         warn = f"{warn} · {extra}" if warn else extra

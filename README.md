@@ -137,14 +137,14 @@ python3 -m venv .venv-mac
 
 ### Confirm the scalable version
 
-The source entry point remains `main.py`. In the **History** page, confirm
-**后台归档全部**, the 200-item preview notice, or the generated
-`data/history_cache.sqlite`. Archive folders contain `archive_index.sqlite` and
-`manifest.jsonl`. To check the source version:
+The source entry point remains `main.py`. On the History page the primary
+button is **拉取并归档正文**. There are no article cards or checkboxes; the UI
+shows article count, pages, elapsed time, and body progress. One click pages
+automatically and then archives bodies to `data/archives/<account>/`.
 
 ```bash
 .venv-mac/bin/python -c "from app import __version__; print(__version__)"
-# 1.9.0
+# 1.9.1
 ```
 
 ### First-time capture flow
@@ -153,29 +153,7 @@ The source entry point remains `main.py`. In the **History** page, confirm
 2. Account name + any article URL → **Add & Capture**; or use **Batch Import** to load a CSV/TXT (column 1 = OA name, column 2 = article URL; comma/tab separated, header auto-detected)  
 3. Open any article from that OA in WeChat Desktop  
 4. Credentials appear (30‑minute TTL). **Renew** does not open a system browser — refresh the already-open article in WeChat; multi-OA traffic is routed by `__biz`  
-5. **History Articles** → pick range (7 / 30 / 90 days, all, or custom days) → **Fetch** → export list or per-article body  
-
-> Prefer **Add & Capture** over starting the proxy alone. Use **补录链接** when you need to add a missing article.
-
-### Large histories: resumable whole-account archive
-
-For hundreds or thousands of articles, choose the date range, fetch the history,
-then click **后台归档全部**. No per-article selection is required. The UI renders
-only the first 200 cards while the full list remains available to the archive job.
-
-The archive uses at most two bounded workers, staggers request starts, and waits
-a randomized 1.5–3.5 seconds between batches. Every successful article is
-written immediately. Re-select the same directory to resume; completed files
-are indexed by `archive_index.sqlite`. The directory also contains
-`manifest.json`, streaming `manifest.jsonl`, `articles/`, `job_state.jsonl`,
-`failures.jsonl`, and `summary.json`.
-
-If a history fetch reaches its 100-page batch limit, click
-**继续拉取下一批** to continue from `next_offset`. History rows and checkpoints
-are persisted in `data/history_cache.sqlite`, including across app restarts.
-If WeChat returns
-`unknownerror`, HTTP 429, or a rate-limit page, stop and wait before resuming.
-Do not increase concurrency or repeatedly retry.
+5. **History Articles** → pick the account (default: all history) → **拉取并归档正文**. Paging and body downloads run automatically. No selection is required.
 
 ---
 

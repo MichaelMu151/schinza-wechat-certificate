@@ -32,7 +32,7 @@ def test_history_starts_from_checkpoint_and_reports_next_offset(monkeypatch) -> 
     assert result["start_offset"] == 100
     assert result["next_offset"] == 110
     assert result["hit_page_cap"] is True
-    assert "再点一次拉取续翻" in result["warning"]
+    assert "将自动继续拉取" in result["warning"]
 
 
 def test_history_continues_when_flag_is_false_but_offset_advances(monkeypatch) -> None:
@@ -65,4 +65,3 @@ def test_history_continues_when_flag_is_false_but_offset_advances(monkeypatch) -
     assert len(result["articles"]) == 2
     assert result["hit_page_cap"] is False
     assert result["pagination_stalled"] is True
-    assert "未返回递增的分页 offset" in result["warning"]

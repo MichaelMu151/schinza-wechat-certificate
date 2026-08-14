@@ -26,13 +26,9 @@ from app.article_reader import (
     ARTICLE_EXPORT_FORMATS,
     fetch_biz_from_url,
     ARTICLE_EXPORT_LABELS,
-    batch_export_articles,
-    extension_for_article_format,
-    fetch_and_parse_article,
     format_key_for_article_label,
-    write_article_export,
 )
-from app.archive_job import run_archive_job
+from app.history_pipeline import run_list_and_archive
 from app.ca_setup import (
     PROXY_HOST,
     PROXY_PORT,
@@ -48,28 +44,18 @@ from app.credentials import (
     normalize_credentials,
 )
 from app.history_account_select import pick_label_for_account_id, resolve_account_id
-from app.history_client import describe_exception, fetch_history_days
-from app.history_cache import HistoryCache, make_query_key
-from app.history_export import (
-    FORMAT_LABELS,
-    default_export_filename,
-    extension_for_label,
-    format_key_for_label,
-    render_export,
-    write_export,
-)
+from app.history_client import describe_exception
+from app.history_cache import HistoryCache
 from app.history_ranges import (
     ALL_LABEL,
     CUSTOM_DAYS_DEFAULT,
     CUSTOM_LABEL,
-    DEFAULT_HISTORY_DAYS,
     HISTORY_RANGE_LABELS,
     MAX_CUSTOM_DAYS,
     RANGE_LABEL,
     date_range_text,
     days_for_label,
     label_for_days,
-    range_text,
 )
 from app.mitm_capture import MitmCaptureService
 from app.sightings import SightingsStore, default_sightings_path
@@ -290,23 +276,14 @@ class CertificateApp(ctk.CTk):
         self._cards: dict[str, AccountCard] = {}
         self._rebuild_job: str | None = None
         self._tab = "credentials"
-        self._history_days: int | None = DEFAULT_HISTORY_DAYS
+        self._history_days: int | None = None
         self._history_custom_days: int | None = None
         self._history_range_iso: tuple[str, str] | None = None
-        self._history_articles: list[dict[str, Any]] = []
         self._history_account_name: str = ""
         self._history_cred: dict[str, Any] = {}
         self._history_fetching = False
         self._history_cancel = False
-        self._article_exporting = False
-        self._batch_exporting = False
-        self._archive_running = False
-        self._archive_cancel = False
-        self._history_selected: set[str] = set()
-        self._history_query_signature: tuple[Any, ...] | None = None
-        self._history_next_offset = 0
-        self._history_cache_key = ""
-        self._history_cache_account_id = ""
+        self._pipeline_out_dir = ""
         self._account_options: list[tuple[str, str]] = []  # (label, id)
         self._history_account_id: str | None = None
         self._nav_btns: dict[str, ctk.CTkButton] = {}
@@ -799,7 +776,7 @@ class CertificateApp(ctk.CTk):
 
         ctk.CTkLabel(
             panel,
-            text="拉取公众号历史文章",
+            text="历史文章正文",
             font=ctk.CTkFont(family=UI_FONT, size=15, weight="bold"),
             text_color=COLORS["text"],
             anchor="w",
@@ -807,7 +784,7 @@ class CertificateApp(ctk.CTk):
 
         ctk.CTkLabel(
             panel,
-            text="选择公众号与时间范围后拉取；支持列表导出与正文导出（HTML / Markdown / TXT / JSON / Word）。",
+            text="选择已抓到凭证的公众号后，一键拉取全部历史列表并自动归档正文。不勾选、不渲染文章卡片。",
             font=ctk.CTkFont(family=UI_FONT, size=12),
             text_color=COLORS["muted"],
             anchor="w",
@@ -858,112 +835,27 @@ class CertificateApp(ctk.CTk):
         self.hist_fetch_btn = ctk.CTkButton(
             panel,
             text=self._fetch_btn_label(),
-            width=120,
+            width=148,
             height=36,
             corner_radius=10,
             fg_color=COLORS["accent"],
             hover_color=COLORS["accent_hover"],
             text_color="#052e16",
             font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
-            command=self.start_history_fetch,
+            command=self.start_history_pipeline,
         )
         self.hist_fetch_btn.grid(row=2, column=3, sticky="e", padx=(0, 18), pady=6)
 
-        self.hist_status = ctk.CTkLabel(
-            panel,
-            text="请选择公众号与时间范围后点击拉取。",
-            text_color=COLORS["muted"],
-            font=ctk.CTkFont(family=UI_FONT, size=12),
-            anchor="w",
-            justify="left",
-            wraplength=720,
-        )
-        self.hist_status.grid(row=3, column=0, columnspan=4, sticky="ew", padx=18, pady=(8, 4))
-
-        list_tools = ctk.CTkFrame(panel, fg_color="transparent")
-        list_tools.grid(row=4, column=0, columnspan=4, sticky="ew", padx=18, pady=(4, 8))
-
+        fmt_row = ctk.CTkFrame(panel, fg_color="transparent")
+        fmt_row.grid(row=3, column=0, columnspan=4, sticky="ew", padx=18, pady=(4, 4))
         ctk.CTkLabel(
-            list_tools,
-            text="列表导出",
+            fmt_row,
+            text="正文格式",
             text_color=COLORS["muted"],
             font=ctk.CTkFont(family=UI_FONT, size=12),
         ).pack(side="left", padx=(0, 10))
-
-        self.hist_format_menu = ctk.CTkOptionMenu(
-            list_tools,
-            values=FORMAT_LABELS,
-            width=128,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["card"],
-            button_color=COLORS["border"],
-            button_hover_color="#3a4a5e",
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(family=UI_FONT, size=12),
-            dropdown_font=ctk.CTkFont(family=UI_FONT, size=12),
-        )
-        self.hist_format_menu.set(FORMAT_LABELS[0])
-        self.hist_format_menu.pack(side="left", padx=(0, 14))
-
-        ctk.CTkButton(
-            list_tools,
-            text="复制列表",
-            width=84,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["border"],
-            hover_color="#3a4a5e",
-            command=self.copy_history_formatted,
-        ).pack(side="left", padx=(0, 14))
-
-        ctk.CTkButton(
-            list_tools,
-            text="导出列表",
-            width=88,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            text_color="#052e16",
-            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
-            command=self.export_history_file,
-        ).pack(side="left", padx=(0, 20))
-
-        ctk.CTkButton(
-            list_tools,
-            text="补录链接",
-            width=88,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["border"],
-            hover_color="#3a4a5e",
-            command=self.manual_add_article_url,
-        ).pack(side="left", padx=(0, 14))
-
-        ctk.CTkButton(
-            list_tools,
-            text="刷新",
-            width=68,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["border"],
-            hover_color="#3a4a5e",
-            command=self.refresh_history_account_options,
-        ).pack(side="left")
-
-        batch_tools = ctk.CTkFrame(panel, fg_color="transparent")
-        batch_tools.grid(row=5, column=0, columnspan=4, sticky="ew", padx=18, pady=(0, 16))
-
-        ctk.CTkLabel(
-            batch_tools,
-            text="正文导出",
-            text_color=COLORS["muted"],
-            font=ctk.CTkFont(family=UI_FONT, size=12),
-        ).pack(side="left", padx=(0, 10))
-
         self.article_fmt_menu = ctk.CTkOptionMenu(
-            batch_tools,
+            fmt_row,
             values=ARTICLE_EXPORT_LABELS,
             width=110,
             height=32,
@@ -977,76 +869,83 @@ class CertificateApp(ctk.CTk):
         )
         self.article_fmt_menu.set("Markdown")
         self.article_fmt_menu.pack(side="left", padx=(0, 14))
-
         ctk.CTkButton(
-            batch_tools,
-            text="全选",
-            width=64,
+            fmt_row,
+            text="刷新账号",
+            width=88,
             height=32,
             corner_radius=8,
             fg_color=COLORS["border"],
             hover_color="#3a4a5e",
-            command=self.select_all_history,
-        ).pack(side="left", padx=(0, 14))
+            command=self.refresh_history_account_options,
+        ).pack(side="left")
 
-        ctk.CTkButton(
-            batch_tools,
-            text="取消选择",
-            width=84,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["border"],
-            hover_color="#3a4a5e",
-            command=self.clear_history_selection,
-        ).pack(side="left", padx=(0, 14))
-
-        self.batch_export_btn = ctk.CTkButton(
-            batch_tools,
-            text="批量导出",
-            width=96,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            text_color="#052e16",
-            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
-            command=self.batch_export_selected,
+        self.hist_status = ctk.CTkLabel(
+            panel,
+            text="默认拉取全部历史。点击一次后会自动翻页并开始归档正文。",
+            text_color=COLORS["muted"],
+            font=ctk.CTkFont(family=UI_FONT, size=12),
+            anchor="w",
+            justify="left",
+            wraplength=720,
         )
-        self.batch_export_btn.pack(side="left", padx=(0, 14))
+        self.hist_status.grid(row=4, column=0, columnspan=4, sticky="ew", padx=18, pady=(8, 14))
 
-        self.archive_all_btn = ctk.CTkButton(
-            batch_tools,
-            text="后台归档全部",
-            width=112,
-            height=32,
-            corner_radius=8,
-            fg_color=COLORS["border"],
-            hover_color="#3a4a5e",
-            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
-            command=self.archive_all_history,
+        stats = ctk.CTkFrame(
+            self.hist_view,
+            fg_color=COLORS["panel"],
+            corner_radius=18,
+            border_width=1,
+            border_color=COLORS["border"],
         )
-        self.archive_all_btn.pack(side="left")
-
-        list_wrap = ctk.CTkFrame(self.hist_view, fg_color="transparent")
-        list_wrap.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 8))
-        list_wrap.grid_columnconfigure(0, weight=1)
-        list_wrap.grid_rowconfigure(1, weight=1)
+        stats.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 16))
+        stats.grid_columnconfigure(0, weight=1)
+        stats.grid_rowconfigure(4, weight=1)
 
         ctk.CTkLabel(
-            list_wrap,
-            text="文章列表（勾选后可批量导出正文）",
+            stats,
+            text="进度",
             font=ctk.CTkFont(family=UI_FONT, size=15, weight="bold"),
             text_color=COLORS["text"],
             anchor="w",
-        ).grid(row=0, column=0, sticky="w", pady=(0, 10))
+        ).grid(row=0, column=0, sticky="w", padx=18, pady=(14, 8))
 
-        self.hist_list = ctk.CTkScrollableFrame(
-            list_wrap,
-            fg_color=COLORS["bg"],
-            corner_radius=12,
+        self.hist_stat_list = ctk.CTkLabel(
+            stats,
+            text="列表：0 篇 · 0 页 · 用时 0s",
+            text_color=COLORS["text"],
+            font=ctk.CTkFont(family=UI_FONT, size=14),
+            anchor="w",
         )
-        self.hist_list.grid(row=1, column=0, sticky="nsew")
-        self.hist_list.grid_columnconfigure(0, weight=1)
+        self.hist_stat_list.grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 4))
+        self.hist_stat_body = ctk.CTkLabel(
+            stats,
+            text="正文：尚未开始",
+            text_color=COLORS["text"],
+            font=ctk.CTkFont(family=UI_FONT, size=14),
+            anchor="w",
+        )
+        self.hist_stat_body.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 4))
+        self.hist_stat_dir = ctk.CTkLabel(
+            stats,
+            text="目录：尚未开始",
+            text_color=COLORS["muted"],
+            font=ctk.CTkFont(family=UI_FONT, size=12),
+            anchor="w",
+            wraplength=720,
+            justify="left",
+        )
+        self.hist_stat_dir.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 8))
+        self.hist_log = ctk.CTkTextbox(
+            stats,
+            height=220,
+            fg_color=COLORS["bg"],
+            text_color=COLORS["muted"],
+            font=ctk.CTkFont(family=MONO_FONT, size=12),
+        )
+        self.hist_log.grid(row=4, column=0, sticky="nsew", padx=18, pady=(0, 16))
+        self.hist_log.insert("end", "不会显示文章卡片。进度只出现在上方数字和本日志中。\n")
+        self.hist_log.configure(state="disabled")
 
     def _build_sync_panel(self) -> None:
         self.sync_view = ctk.CTkFrame(self.body, fg_color="transparent")
@@ -2140,11 +2039,7 @@ class CertificateApp(ctk.CTk):
         )
 
     def _fetch_btn_label(self) -> str:
-        if self._history_range_iso:
-            return f"拉取 {self._history_range_iso[0]}~{self._history_range_iso[1]}"
-        if self._history_days is None:
-            return "拉取全部历史"
-        return f"拉取近{self._history_days}天"
+        return "拉取并归档正文"
 
     def _history_range_label(self) -> str:
         """当前选择对应的下拉框文案（自定义值显示为「自定义 N 天」）。"""
@@ -2496,13 +2391,64 @@ class CertificateApp(ctk.CTk):
         if not self._history_fetching:
             self.hist_fetch_btn.configure(text=self._fetch_btn_label())
 
-    def cancel_history_fetch(self) -> None:
-        """请求取消正在进行的拉取（「全部」模式大翻页时避免看起来卡死）。"""
-        self._history_cancel = True
-        self.set_hist_status("正在取消拉取…", ok=True)
+    def _append_hist_log(self, line: str) -> None:
+        self.hist_log.configure(state="normal")
+        self.hist_log.insert("end", line.rstrip() + "\n")
+        self.hist_log.see("end")
+        content = self.hist_log.get("1.0", "end")
+        lines = content.splitlines()
+        if len(lines) > 80:
+            self.hist_log.delete("1.0", "end")
+            self.hist_log.insert("end", "\n".join(lines[-60:]) + "\n")
+        self.hist_log.configure(state="disabled")
 
-    def start_history_fetch(self) -> None:
+    def _update_pipeline_progress(self, event: dict[str, Any]) -> None:
+        articles = int(event.get("articles") or 0)
+        pages = int(event.get("pages") or 0)
+        elapsed = int(event.get("elapsed_s") or 0)
+        stage = str(event.get("stage") or "")
+        self.hist_stat_list.configure(
+            text=f"列表：{articles} 篇 · {pages} 页 · 用时 {elapsed}s"
+        )
+        if stage == "archiving" or event.get("ok") is not None:
+            current = int(event.get("current") or 0)
+            total = int(event.get("total") or 0)
+            ok_n = int(event.get("ok") or 0)
+            failed_n = int(event.get("failed") or 0)
+            skipped_n = int(event.get("skipped") or 0)
+            extra = f"{current}/{total} · " if total else ""
+            self.hist_stat_body.configure(
+                text=f"正文：{extra}成功 {ok_n} · 失败 {failed_n} · 跳过 {skipped_n}"
+            )
+        elif stage == "listing":
+            self.hist_stat_body.configure(text="正文：等待列表拉完后自动开始")
+        out_dir = str(event.get("out_dir") or self._pipeline_out_dir or "")
+        if out_dir:
+            self.hist_stat_dir.configure(text=f"目录：{out_dir}")
+        title = str(event.get("title") or "").strip()
+        if title:
+            self._append_hist_log(
+                f"[{stage or 'run'}] {articles}篇/{pages}页/{elapsed}s {title}"
+            )
+        ok_flag = None
+        if stage in {"cancelled"}:
+            ok_flag = False
+        elif stage == "done":
+            ok_flag = not bool(event.get("failed"))
+        self.set_hist_status(
+            f"{stage or '运行中'} · 列表 {articles} 篇 · {pages} 页 · {elapsed}s"
+            + (f" · {title}" if title else ""),
+            ok=ok_flag,
+        )
+
+    def cancel_history_fetch(self) -> None:
+        self._history_cancel = True
+        self.hist_fetch_btn.configure(state="disabled", text="正在停止…")
+        self.set_hist_status("正在安全停止；已写入的列表和正文会保留。", ok=False)
+
+    def start_history_pipeline(self) -> None:
         if self._history_fetching:
+            self.cancel_history_fetch()
             return
         self.refresh_history_account_options()
         account_id = self._selected_history_account_id()
@@ -2517,598 +2463,116 @@ class CertificateApp(ctk.CTk):
         if not row:
             return
         cred = dict(row.get("credentials") or {})
-        # Prefer credentials.__biz (source of truth for getmsg)
         if not cred.get("__biz") and row.get("biz"):
             cred["__biz"] = row["biz"]
-
-        # History fetch must NOT go through MITM system proxy
-        if self.mitm.running:
-            self.set_hist_status(
-                "提示：抓包代理运行中时，历史拉取会直连微信（绕过系统代理）。正在拉取…",
-                ok=True,
-            )
-        else:
-            self.set_hist_status("正在拉取历史文章…", ok=True)
-
+        name = str(row.get("name") or "")
+        safe_account = re.sub(r'[\\/:*?"<>|]+', "_", name or "公众号")[:60]
+        out_dir = self.root_dir / "data" / "archives" / safe_account
+        out_dir.mkdir(parents=True, exist_ok=True)
+        self._pipeline_out_dir = str(out_dir)
+        fmt_key = self._resolve_article_fmt(self.article_fmt_menu.get())
+        start_ts = end_ts = None
+        if self._history_range_iso:
+            start_ts = _iso_date_to_ts(self._history_range_iso[0])
+            end_ts = _iso_date_to_ts(self._history_range_iso[1], end_of_day=True)
+        self.sightings.load()
+        sightings = self.sightings.list_for_biz(str(cred.get("__biz") or row.get("biz") or ""))
         self._history_fetching = True
         self._history_cancel = False
         self._history_cred = cred
-        self.hist_fetch_btn.configure(
-            state="normal", text="取消拉取", command=self.cancel_history_fetch
-        )
-        name = str(row.get("name") or "")
-        biz = str(cred.get("__biz") or row.get("biz") or "").strip()
-        signature: tuple[Any, ...] = (
-            account_id,
-            self._history_days,
-            self._history_range_iso,
-        )
-        if signature != self._history_query_signature:
-            query_key = make_query_key(
-                account_id,
-                days=self._history_days,
-                date_range=self._history_range_iso,
-            )
-            cached = self.history_cache.load(query_key)
-            self._history_articles = list(cached.get("articles") or [])
-            self._history_next_offset = (
-                0 if cached.get("complete") else int(cached.get("next_offset") or 0)
-            )
-            self._history_cache_key = query_key
-            self._history_cache_account_id = account_id
-        self._history_query_signature = signature
-        start_offset = self._history_next_offset
-        self.sightings.load()
-        sightings = self.sightings.list_for_biz(biz)
+        self._history_account_name = name
+        self.hist_fetch_btn.configure(text="停止", state="normal")
+        self.hist_stat_dir.configure(text=f"目录：{out_dir}")
+        self.set_hist_status("正在后台拉取列表并自动归档正文…", ok=True)
+        self._append_hist_log(f"开始「{name}」→ {out_dir}")
 
         def worker() -> None:
-            def progress(msg: str) -> None:
-                self.after(0, lambda m=msg: self.set_hist_status(m, ok=True))
-
+            err = ""
             try:
-                start_ts = None
-                end_ts = None
-                if self._history_range_iso:
-                    start_ts = _iso_date_to_ts(self._history_range_iso[0])
-                    end_ts = _iso_date_to_ts(self._history_range_iso[1], end_of_day=True)
-                result = fetch_history_days(
+                result = run_list_and_archive(
                     cred,
+                    account_id=account_id,
+                    account_name=name,
+                    cache=self.history_cache,
                     days=self._history_days,
-                    max_pages=100,
-                    on_progress=progress,
-                    sightings=sightings,
-                    should_cancel=lambda: self._history_cancel,
+                    date_range=self._history_range_iso,
                     start_ts=start_ts,
                     end_ts=end_ts,
-                    start_offset=start_offset,
+                    sightings=sightings,
+                    out_dir=out_dir,
+                    fmt=fmt_key,
+                    on_progress=lambda event: self.after(
+                        0, lambda e=dict(event): self._update_pipeline_progress(e)
+                    ),
+                    should_cancel=lambda: self._history_cancel,
                 )
             except Exception as exc:  # noqa: BLE001
                 result = {
-                    "ok": False,
-                    "error": describe_exception(exc),
-                    "articles": [],
-                    "start_offset": start_offset,
-                    "next_offset": start_offset,
+                    "articles": 0,
+                    "pages": 0,
+                    "elapsed_s": 0,
+                    "cancelled": False,
+                    "listing_error": describe_exception(exc),
+                    "out_dir": str(out_dir),
+                    "archive": None,
                 }
-            self.after(0, lambda: self._on_history_done(name, result))
+                err = describe_exception(exc)
+            self.after(0, lambda: self._on_pipeline_done(result, err))
 
-        threading.Thread(target=worker, name="schinza-history", daemon=True).start()
+        threading.Thread(target=worker, name="schinza-list-archive", daemon=True).start()
 
-    def _on_history_done(self, account_name: str, result: dict[str, Any]) -> None:
+    def _on_pipeline_done(self, result: dict[str, Any], err: str) -> None:
         self._history_fetching = False
-        self.hist_fetch_btn.configure(
-            state="normal", text=self._fetch_btn_label(), command=self.start_history_fetch
+        self._history_cancel = False
+        self.hist_fetch_btn.configure(state="normal", text=self._fetch_btn_label())
+        articles = int(result.get("articles") or 0)
+        pages = int(result.get("pages") or 0)
+        elapsed = int(result.get("elapsed_s") or 0)
+        out = str(result.get("out_dir") or self._pipeline_out_dir)
+        archive = result.get("archive") or {}
+        self.hist_stat_list.configure(
+            text=f"列表：{articles} 篇 · {pages} 页 · 用时 {elapsed}s"
         )
-        fetched_articles = list(result.get("articles") or [])
-        pagination_stalled = bool(result.get("pagination_stalled"))
-        complete = bool(
-            result.get("ok")
-            and not result.get("hit_page_cap")
-            and not pagination_stalled
-        )
-        next_offset = 0 if complete else int(result.get("next_offset") or 0)
-        if self._history_cache_key and self._history_cache_account_id:
-            self.history_cache.save_batch(
-                self._history_cache_key,
-                account_id=self._history_cache_account_id,
-                account_name=account_name,
-                days=self._history_days,
-                date_range=self._history_range_iso,
-                articles=fetched_articles,
-                next_offset=next_offset,
-                complete=complete,
+        if archive:
+            self.hist_stat_body.configure(
+                text=(
+                    f"正文：成功 {int(archive.get('ok') or 0)} · "
+                    f"失败 {int(archive.get('failed') or 0)} · "
+                    f"跳过 {int(archive.get('skipped') or 0)}"
+                )
             )
-            cached = self.history_cache.load(self._history_cache_key)
-            articles = list(cached.get("articles") or [])
-            self._history_next_offset = (
-                0 if cached.get("complete") else int(cached.get("next_offset") or 0)
-            )
-        else:
-            articles = fetched_articles
-            self._history_next_offset = next_offset
-        self._history_articles = articles
-        self._history_account_name = account_name
-        self._history_selected.clear()
-        self._render_history_list()
-        if result.get("hit_page_cap"):
-            self.hist_fetch_btn.configure(text="继续拉取下一批")
-        elif pagination_stalled:
-            self.hist_fetch_btn.configure(text="重新尝试当前页")
+        if out:
+            self.hist_stat_dir.configure(text=f"目录：{out}")
+        if err:
+            self.set_hist_status(f"任务异常：{err}", ok=False)
+            return
         if result.get("cancelled"):
             self.set_hist_status(
-                f"已取消拉取；缓存已保存，共保留 {len(articles)} 篇。"
-                "下次选择相同账号和范围可续拉。",
+                f"已停止：列表 {articles} 篇 · {pages} 页 · {elapsed}s。同一账号再点一次即可续跑。",
                 ok=False,
             )
             return
-        if not result.get("ok"):
+        listing_error = str(result.get("listing_error") or "").strip()
+        if listing_error:
             self.set_hist_status(
-                f"拉取失败：{result.get('error') or '未知错误'}（已展示部分结果 {len(articles)} 篇）"
-                if articles
-                else f"拉取失败：{result.get('error') or '未知错误'}",
+                f"列表未拉完（{listing_error}）。已归档已有 {articles} 篇。"
+                "刷新凭证后同一账号再点一次会续拉。",
                 ok=False,
             )
             return
-        pages = result.get("pages") or 0
-        warn = str(result.get("warning") or "").strip()
-        scope = (
-            date_range_text(*self._history_range_iso)
-            if self._history_range_iso
-            else range_text(self._history_days)
-        )
-        msg = f"「{account_name}」{scope}共 {len(articles)} 篇（请求 {pages} 页）"
-        if warn:
-            msg = f"{msg} · {warn}"
-        self.set_hist_status(msg, ok=None if (result.get("hit_page_cap") or pagination_stalled) else True)
-
-    def _render_history_text(self) -> tuple[str, str]:
-        """Return (format_label, rendered text)."""
-        label = self.hist_format_menu.get()
-        key = format_key_for_label(label)
-        text = render_export(
-            self._history_articles,
-            fmt=key,
-            account_name=self._history_account_name,
-            days=self._history_days,
-        )
-        return label, text
-
-    def _article_key(self, art: dict[str, Any]) -> str:
-        return str(art.get("identity") or art.get("link") or art.get("title") or "")
-
-    def select_all_history(self) -> None:
-        self._history_selected = {
-            self._article_key(a) for a in self._history_articles if self._article_key(a)
-        }
-        self._render_history_list()
-        self.set_hist_status(f"已全选 {len(self._history_selected)} 篇", ok=True)
-
-    def clear_history_selection(self) -> None:
-        self._history_selected.clear()
-        self._render_history_list()
-        self.set_hist_status("已取消选择", ok=True)
-
-    def _toggle_history_select(self, key: str, checked: bool) -> None:
-        if not key:
-            return
-        if checked:
-            self._history_selected.add(key)
-        else:
-            self._history_selected.discard(key)
-
-    def _render_history_list(self) -> None:
-        for child in self.hist_list.winfo_children():
-            child.destroy()
-        if not self._history_articles:
-            ctk.CTkLabel(
-                self.hist_list,
-                text="暂无文章。选择有效凭证后点击拉取。",
-                text_color=COLORS["muted"],
-                font=ctk.CTkFont(family=UI_FONT, size=13),
-            ).grid(row=0, column=0, pady=40)
-            return
-        # Creating thousands of full Tk cards blocks the UI for minutes.  Keep
-        # the complete data in memory for exports, but render only a preview.
-        preview_limit = 200
-        visible = self._history_articles[:preview_limit]
-        row_offset = 0
-        if len(self._history_articles) > preview_limit:
-            ctk.CTkLabel(
-                self.hist_list,
-                text=(
-                    f"共 {len(self._history_articles)} 篇；为保持界面流畅，"
-                    f"这里只预览前 {preview_limit} 篇。可直接点击“后台归档全部”。"
-                ),
-                text_color=COLORS["warn"],
-                font=ctk.CTkFont(family=UI_FONT, size=12),
-                anchor="w",
-                justify="left",
-                wraplength=720,
-            ).grid(row=0, column=0, sticky="ew", pady=(0, 12))
-            row_offset = 1
-        for i, art in enumerate(visible):
-            card = ctk.CTkFrame(
-                self.hist_list,
-                fg_color=COLORS["card"],
-                corner_radius=12,
-                border_width=1,
-                border_color=COLORS["border"],
-            )
-            card.grid(row=i + row_offset, column=0, sticky="ew", pady=(0, 12))
-            card.grid_columnconfigure(1, weight=1)
-
-            key = self._article_key(art)
-            var = ctk.BooleanVar(value=key in self._history_selected)
-            ctk.CTkCheckBox(
-                card,
-                text="",
-                width=28,
-                checkbox_width=20,
-                checkbox_height=20,
-                fg_color=COLORS["accent"],
-                hover_color=COLORS["accent_hover"],
-                border_color=COLORS["border"],
-                variable=var,
-                command=lambda k=key, v=var: self._toggle_history_select(k, bool(v.get())),
-            ).grid(row=0, column=0, rowspan=3, sticky="n", padx=(14, 6), pady=14)
-
-            title = art.get("title") or "(无标题)"
-            when = art.get("publish_at") or ""
-            digest = (art.get("digest") or "")[:80]
-            link = art.get("link") or ""
-            source = str(art.get("source") or "getmsg")
-            source_tag = {
-                "getmsg": "",
-                "mitm": " · 抓包补全",
-                "mitm_getmsg": " · 抓包补全",
-                "manual": " · 补录",
-                "sighting": " · 补全",
-            }.get(source, f" · {source}" if source != "getmsg" else "")
-
-            ctk.CTkLabel(
-                card,
-                text=title,
-                font=ctk.CTkFont(family=UI_FONT, size=14, weight="bold"),
-                text_color=COLORS["text"],
-                anchor="w",
-                justify="left",
-                wraplength=640,
-            ).grid(row=0, column=1, sticky="w", padx=(0, 14), pady=(12, 2))
-
-            meta = when + (f"  ·  {digest}" if digest else "") + source_tag
-            ctk.CTkLabel(
-                card,
-                text=meta or link[:72],
-                font=ctk.CTkFont(family=UI_FONT, size=12),
-                text_color=COLORS["muted"],
-                anchor="w",
-                justify="left",
-                wraplength=640,
-            ).grid(row=1, column=1, sticky="w", padx=(0, 14), pady=(0, 8))
-
-            actions = ctk.CTkFrame(card, fg_color="transparent")
-            actions.grid(row=2, column=1, sticky="e", padx=(0, 14), pady=(0, 14))
-
-            ctk.CTkButton(
-                actions,
-                text="打开",
-                width=60,
-                height=30,
-                corner_radius=8,
-                fg_color=COLORS["accent"],
-                hover_color=COLORS["accent_hover"],
-                text_color="#052e16",
-                command=lambda u=link: self._open_url(u),
-            ).pack(side="left", padx=(0, 12))
-
-            ctk.CTkButton(
-                actions,
-                text="复制链接",
-                width=80,
-                height=30,
-                corner_radius=8,
-                fg_color=COLORS["border"],
-                hover_color="#3a4a5e",
-                command=lambda u=link: self._copy_text(u, "已复制链接"),
-            ).pack(side="left", padx=(0, 12))
-
-            fmt_menu = ctk.CTkOptionMenu(
-                actions,
-                values=ARTICLE_EXPORT_LABELS,
-                width=110,
-                height=30,
-                corner_radius=8,
-                fg_color=COLORS["bg"],
-                button_color=COLORS["border"],
-                button_hover_color="#3a4a5e",
-                text_color=COLORS["text"],
-                font=ctk.CTkFont(family=UI_FONT, size=12),
-                dropdown_font=ctk.CTkFont(family=UI_FONT, size=12),
-            )
-            fmt_menu.set(self.article_fmt_menu.get() if hasattr(self, "article_fmt_menu") else "Markdown")
-            fmt_menu.pack(side="left", padx=(0, 12))
-
-            ctk.CTkButton(
-                actions,
-                text="导出",
-                width=68,
-                height=30,
-                corner_radius=8,
-                fg_color=COLORS["border"],
-                hover_color="#3a4a5e",
-                command=lambda a=art, m=fmt_menu: self.export_article(
-                    a, fmt=format_key_for_article_label(m.get())
-                ),
-            ).pack(side="left")
-
-    def _copy_text(self, text: str, ok_msg: str) -> None:
-        try:
-            pyperclip.copy(text or "")
-            self.set_hist_status(ok_msg, ok=True)
-        except Exception as exc:
-            self.set_hist_status(f"复制失败: {exc}", ok=False)
-
-    def copy_history_formatted(self) -> None:
-        if not self._history_articles:
-            self.set_hist_status("没有可复制的文章", ok=False)
-            return
-        try:
-            label, text = self._render_history_text()
-            pyperclip.copy(text)
+        paused = bool(archive.get("paused_rate_limit"))
+        failed = int(archive.get("failed") or 0)
+        if paused:
             self.set_hist_status(
-                f"已按「{label}」复制 {len(self._history_articles)} 篇到剪贴板",
-                ok=True,
-            )
-        except Exception as exc:
-            self.set_hist_status(f"复制失败: {exc}", ok=False)
-
-    def export_history_file(self) -> None:
-        if not self._history_articles:
-            self.set_hist_status("没有可导出的文章", ok=False)
-            return
-        label = self.hist_format_menu.get()
-        ext = extension_for_label(label)
-        default_name = default_export_filename(
-            account_name=self._history_account_name,
-            days=self._history_days,
-            ext=ext,
-        )
-        initial_dir = str((self.root_dir / "data").resolve())
-        Path(initial_dir).mkdir(parents=True, exist_ok=True)
-        filetypes = [
-            (label, f"*.{ext}"),
-            ("所有文件", "*.*"),
-        ]
-        path_str = filedialog.asksaveasfilename(
-            parent=self,
-            title="导出文章列表",
-            initialdir=initial_dir,
-            initialfile=default_name,
-            defaultextension=f".{ext}",
-            filetypes=filetypes,
-        )
-        if not path_str:
-            return
-        try:
-            _label, text = self._render_history_text()
-            path = write_export(Path(path_str), text)
-            self.set_hist_status(
-                f"已导出 {_label}（{len(self._history_articles)} 篇）→ {path}",
-                ok=True,
-            )
-        except Exception as exc:
-            self.set_hist_status(f"导出失败: {exc}", ok=False)
-
-    def _ask_article_url_dialog(self) -> str | None:
-        """Themed modal for补录链接 — matches app COLORS (not system simpledialog)."""
-        result: dict[str, str | None] = {"url": None}
-
-        dlg = ctk.CTkToplevel(self)
-        dlg.title("补录文章链接")
-        dlg.configure(fg_color=COLORS["bg"])
-        dlg.geometry("520x260")
-        dlg.minsize(480, 240)
-        dlg.transient(self)
-        dlg.grab_set()
-        dlg.resizable(False, False)
-
-        # Center over parent
-        try:
-            self.update_idletasks()
-            x = self.winfo_rootx() + (self.winfo_width() - 520) // 2
-            y = self.winfo_rooty() + (self.winfo_height() - 260) // 2
-            dlg.geometry(f"+{max(0, x)}+{max(0, y)}")
-        except Exception:
-            pass
-
-        card = ctk.CTkFrame(
-            dlg,
-            fg_color=COLORS["panel"],
-            corner_radius=16,
-            border_width=1,
-            border_color=COLORS["border"],
-        )
-        card.pack(fill="both", expand=True, padx=16, pady=16)
-        card.grid_columnconfigure(0, weight=1)
-
-        ctk.CTkLabel(
-            card,
-            text="补录文章链接",
-            font=ctk.CTkFont(family=UI_FONT, size=16, weight="bold"),
-            text_color=COLORS["text"],
-            anchor="w",
-        ).grid(row=0, column=0, sticky="ew", padx=18, pady=(16, 4))
-
-        ctk.CTkLabel(
-            card,
-            text="粘贴公众号文章链接，将合并进当前列表。",
-            font=ctk.CTkFont(family=UI_FONT, size=12),
-            text_color=COLORS["muted"],
-            anchor="w",
-            justify="left",
-            wraplength=440,
-        ).grid(row=1, column=0, sticky="ew", padx=18, pady=(0, 10))
-
-        entry = ctk.CTkEntry(
-            card,
-            height=40,
-            corner_radius=10,
-            border_color=COLORS["border"],
-            fg_color=COLORS["card"],
-            text_color=COLORS["text"],
-            placeholder_text="https://mp.weixin.qq.com/s/…",
-            font=ctk.CTkFont(family=MONO_FONT, size=13),
-        )
-        entry.grid(row=2, column=0, sticky="ew", padx=18, pady=(0, 8))
-        entry.focus_set()
-
-        err_lbl = ctk.CTkLabel(
-            card,
-            text="",
-            font=ctk.CTkFont(family=UI_FONT, size=11),
-            text_color=COLORS["danger"],
-            anchor="w",
-        )
-        err_lbl.grid(row=3, column=0, sticky="ew", padx=18, pady=(0, 4))
-
-        btns = ctk.CTkFrame(card, fg_color="transparent")
-        btns.grid(row=4, column=0, sticky="e", padx=18, pady=(8, 16))
-
-        def close_cancel() -> None:
-            result["url"] = None
-            dlg.grab_release()
-            dlg.destroy()
-
-        def confirm() -> None:
-            raw = (entry.get() or "").strip()
-            if not raw:
-                err_lbl.configure(text="请粘贴文章链接")
-                return
-            if "mp.weixin.qq.com" not in raw:
-                err_lbl.configure(text="请输入微信公众号文章链接（mp.weixin.qq.com）")
-                return
-            result["url"] = raw
-            dlg.grab_release()
-            dlg.destroy()
-
-        ctk.CTkButton(
-            btns,
-            text="取消",
-            width=88,
-            height=34,
-            corner_radius=10,
-            fg_color=COLORS["border"],
-            hover_color="#3a4a5e",
-            text_color=COLORS["text"],
-            font=ctk.CTkFont(family=UI_FONT, size=13),
-            command=close_cancel,
-        ).pack(side="left", padx=(0, 8))
-
-        ctk.CTkButton(
-            btns,
-            text="补录",
-            width=96,
-            height=34,
-            corner_radius=10,
-            fg_color=COLORS["accent"],
-            hover_color=COLORS["accent_hover"],
-            text_color="#052e16",
-            font=ctk.CTkFont(family=UI_FONT, size=13, weight="bold"),
-            command=confirm,
-        ).pack(side="left")
-
-        dlg.protocol("WM_DELETE_WINDOW", close_cancel)
-        entry.bind("<Return>", lambda _e: confirm())
-        entry.bind("<Escape>", lambda _e: close_cancel())
-
-        self.wait_window(dlg)
-        return result["url"]
-
-    def manual_add_article_url(self) -> None:
-        """补录一篇文章链接并合并进当前列表。"""
-        account_id = self._selected_history_account_id()
-        row = self.store.get(account_id) if account_id else None
-        biz = ""
-        if row:
-            cred = row.get("credentials") or {}
-            biz = str(cred.get("__biz") or row.get("biz") or "").strip()
-
-        url = self._ask_article_url_dialog()
-        if not url:
-            return
-
-        self.set_hist_status("正在读取补录文章标题…", ok=True)
-        cred = dict(self._history_cred or (row.get("credentials") if row else {}) or {})
-
-        def worker() -> None:
-            try:
-                art = fetch_and_parse_article(url, cred=cred or None)
-                sighting = {
-                    "title": art.get("title") or "",
-                    "link": art.get("link") or url,
-                    "publish_ts": int(art.get("publish_ts") or 0),
-                    "publish_at": art.get("publish_at") or "",
-                    "__biz": biz,
-                    "source": "manual",
-                    "digest": "",
-                }
-                self.sightings.upsert(sighting)
-                err = ""
-            except Exception as exc:  # noqa: BLE001
-                # Still save bare URL so merge can keep it
-                self.sightings.upsert(
-                    {
-                        "title": "(补录，待读正文)",
-                        "link": url,
-                        "__biz": biz,
-                        "source": "manual",
-                        "publish_ts": 0,
-                    }
-                )
-                art = {"title": "(补录，待读正文)", "link": url}
-                err = describe_exception(exc)
-            self.after(0, lambda: self._on_manual_add_done(art, err))
-
-        threading.Thread(target=worker, name="schinza-manual-add", daemon=True).start()
-
-    def _on_manual_add_done(self, art: dict[str, Any], err: str) -> None:
-        title = art.get("title") or "(无标题)"
-        if err:
-            self.set_hist_status(
-                f"已补录链接（正文暂读失败：{err}）。请再点「{self._fetch_btn_label()}」合并进列表。",
+                f"正文遇到频控已暂停：列表 {articles} 篇 · {pages} 页 · {elapsed}s → {out}",
                 ok=False,
             )
-        else:
-            self.set_hist_status(
-                f"已补录「{title}」。再点「{self._fetch_btn_label()}」即可合并进列表。",
-                ok=True,
-            )
-        # Soft-merge into current list without full refetch
-        link = str(art.get("link") or "")
-        if link:
-            exists = any(
-                (a.get("link") == link)
-                or (
-                    a.get("identity")
-                    and a.get("identity") == art.get("identity")
-                )
-                for a in self._history_articles
-            )
-            if not exists:
-                row = {
-                    "title": art.get("title") or "(无标题)",
-                    "link": link,
-                    "digest": "",
-                    "publish_ts": int(art.get("publish_ts") or 0),
-                    "publish_at": art.get("publish_at") or "",
-                    "source": "manual",
-                    "identity": art.get("identity") or link,
-                }
-                self._history_articles.insert(0, row)
-                self._history_articles.sort(
-                    key=lambda a: int(a.get("publish_ts") or 0), reverse=True
-                )
-                self._render_history_list()
+            return
+        self.set_hist_status(
+            f"完成：列表 {articles} 篇 · {pages} 页 · {elapsed}s"
+            f"{' · 有失败正文' if failed else ''} → {out}",
+            ok=failed == 0,
+        )
 
     def _resolve_article_fmt(self, fmt: str) -> str:
         raw = (fmt or "markdown").strip()
@@ -3124,271 +2588,6 @@ class CertificateApp(ctk.CTk):
         if key not in ARTICLE_EXPORT_FORMATS:
             return "markdown"
         return key
-
-    def export_article(self, art: dict[str, Any], *, fmt: str) -> None:
-        if self._article_exporting or self._batch_exporting or self._archive_running:
-            self.set_hist_status("正在导出中，请稍候…", ok=False)
-            return
-        link = str(art.get("link") or "").strip()
-        if not link:
-            self.set_hist_status("该条目没有链接，无法导出正文", ok=False)
-            return
-        fmt_key = self._resolve_article_fmt(fmt)
-        title = str(art.get("title") or "article")
-        safe = re.sub(r'[\\/:*?"<>|]+', "_", title)[:48] or "article"
-        ext = extension_for_article_format(fmt_key)
-        label = ARTICLE_EXPORT_FORMATS.get(fmt_key, fmt_key.upper())
-        initial_dir = str((self.root_dir / "data" / "exports").resolve())
-        Path(initial_dir).mkdir(parents=True, exist_ok=True)
-        path_str = filedialog.asksaveasfilename(
-            parent=self,
-            title=f"导出文章为 {label}",
-            initialdir=initial_dir,
-            initialfile=f"{safe}.{ext}",
-            defaultextension=f".{ext}",
-            filetypes=[
-                (label, f"*.{ext}"),
-                ("所有文件", "*.*"),
-            ],
-        )
-        if not path_str:
-            return
-
-        self._article_exporting = True
-        self.set_hist_status(f"正在读取正文并导出 {label}…", ok=True)
-        cred = dict(self._history_cred or {})
-
-        def worker() -> None:
-            try:
-                parsed = fetch_and_parse_article(link, cred=cred or None)
-                if not parsed.get("publish_at") and art.get("publish_at"):
-                    parsed["publish_at"] = art.get("publish_at")
-                if not parsed.get("publish_ts") and art.get("publish_ts"):
-                    parsed["publish_ts"] = art.get("publish_ts")
-                path = write_article_export(Path(path_str), parsed, fmt_key)
-                err = ""
-            except Exception as exc:  # noqa: BLE001
-                path = Path(path_str)
-                err = describe_exception(exc)
-            self.after(
-                0,
-                lambda: self._on_article_export_done(path if not err else None, err, ext),
-            )
-
-        threading.Thread(target=worker, name="schinza-article-export", daemon=True).start()
-
-    def _on_article_export_done(
-        self, path: Path | None, err: str, ext: str
-    ) -> None:
-        self._article_exporting = False
-        if err or path is None:
-            self.set_hist_status(f"导出失败：{err or '未知错误'}", ok=False)
-            return
-        self.set_hist_status(f"已导出 {ext.upper()} → {path}", ok=True)
-
-    def archive_all_history(self) -> None:
-        """Archive every fetched article without building/using a selection."""
-        if self._archive_running:
-            self._archive_cancel = True
-            self.archive_all_btn.configure(state="disabled", text="正在停止…")
-            self.set_hist_status("正在安全停止；已完成文章会保留，下次可续跑。", ok=False)
-            return
-        if self._batch_exporting or self._article_exporting:
-            self.set_hist_status("已有导出任务正在运行，请稍候。", ok=False)
-            return
-        if not self._history_articles:
-            self.set_hist_status("没有可归档的文章，请先拉取历史列表。", ok=False)
-            return
-
-        safe_account = re.sub(
-            r'[\\/:*?"<>|]+', "_", self._history_account_name or "公众号"
-        )[:60]
-        default_dir = self.root_dir / "data" / "archives" / safe_account
-        default_dir.mkdir(parents=True, exist_ok=True)
-        dir_str = filedialog.askdirectory(
-            parent=self,
-            title=f"选择归档目录（全部 {len(self._history_articles)} 篇，可续跑）",
-            initialdir=str(default_dir),
-        )
-        if not dir_str:
-            return
-
-        fmt_key = self._resolve_article_fmt(self.article_fmt_menu.get())
-        label = ARTICLE_EXPORT_FORMATS.get(fmt_key, fmt_key)
-        cred = dict(self._history_cred or {})
-        self._archive_running = True
-        self._archive_cancel = False
-        self.archive_all_btn.configure(text="停止归档", state="normal")
-        self.batch_export_btn.configure(state="disabled")
-        self.set_hist_status(
-            f"后台归档全部 {len(self._history_articles)} 篇为 {label}；"
-            "最多 2 个错峰 worker，可安全停止并续跑。",
-            ok=True,
-        )
-
-        def progress(event: dict[str, Any]) -> None:
-            current = int(event.get("current") or 0)
-            total = int(event.get("total") or 0)
-            ok_n = int(event.get("ok") or 0)
-            failed_n = int(event.get("failed") or 0)
-            skipped_n = int(event.get("skipped") or 0)
-            title = str(event.get("title") or "")[:30]
-            self.after(
-                0,
-                lambda: self.set_hist_status(
-                    f"后台归档 {current}/{total} · 本次成功 {ok_n} · "
-                    f"失败 {failed_n} · 已有跳过 {skipped_n} · {title}",
-                    ok=True,
-                ),
-            )
-
-        def worker() -> None:
-            err = ""
-            try:
-                result = run_archive_job(
-                    list(self._history_articles),
-                    account_name=self._history_account_name,
-                    out_dir=Path(dir_str),
-                    fmt=fmt_key,
-                    cred=cred or None,
-                    on_progress=progress,
-                    should_cancel=lambda: self._archive_cancel,
-                    sleep_min_s=1.5,
-                    sleep_max_s=3.5,
-                )
-            except Exception as exc:  # noqa: BLE001
-                result = {
-                    "total": len(self._history_articles),
-                    "ok": 0,
-                    "failed": 0,
-                    "skipped": 0,
-                    "out_dir": dir_str,
-                }
-                err = describe_exception(exc)
-            self.after(0, lambda: self._on_archive_done(result, err, label))
-
-        threading.Thread(
-            target=worker, name="schinza-whole-archive", daemon=True
-        ).start()
-
-    def _on_archive_done(
-        self, result: dict[str, Any], err: str, label: str
-    ) -> None:
-        self._archive_running = False
-        self._archive_cancel = False
-        self.archive_all_btn.configure(state="normal", text="后台归档全部")
-        self.batch_export_btn.configure(state="normal")
-        if err:
-            self.set_hist_status(f"后台归档异常：{err}", ok=False)
-            return
-        ok_n = int(result.get("ok") or 0)
-        failed_n = int(result.get("failed") or 0)
-        skipped_n = int(result.get("skipped") or 0)
-        out = str(result.get("out_dir") or "")
-        if result.get("paused_rate_limit"):
-            self.set_hist_status(
-                f"检测到微信频控，已暂停归档：本次成功 {ok_n}、失败 {failed_n}、"
-                f"已有跳过 {skipped_n}。等待后选择同一目录即可续跑 → {out}",
-                ok=False,
-            )
-        elif result.get("cancelled"):
-            self.set_hist_status(
-                f"已安全停止：本次成功 {ok_n}、已有跳过 {skipped_n}。"
-                f"选择同一目录可续跑 → {out}",
-                ok=True,
-            )
-        else:
-            self.set_hist_status(
-                f"后台归档完成（{label}）：本次成功 {ok_n} · 失败 {failed_n} · "
-                f"已有跳过 {skipped_n} → {out}",
-                ok=failed_n == 0,
-            )
-
-    def batch_export_selected(self) -> None:
-        if self._batch_exporting or self._article_exporting or self._archive_running:
-            self.set_hist_status("正在导出中，请稍候…", ok=False)
-            return
-        if not self._history_articles:
-            self.set_hist_status("没有可导出的文章，请先拉取历史", ok=False)
-            return
-        selected = [
-            a
-            for a in self._history_articles
-            if self._article_key(a) in self._history_selected
-        ]
-        if not selected:
-            selected = list(self._history_articles)
-            self.set_hist_status(
-                f"未勾选文章，将导出全部 {len(selected)} 篇…", ok=True
-            )
-        fmt_key = self._resolve_article_fmt(self.article_fmt_menu.get())
-        label = ARTICLE_EXPORT_FORMATS.get(fmt_key, fmt_key)
-        initial_dir = str((self.root_dir / "data" / "exports").resolve())
-        Path(initial_dir).mkdir(parents=True, exist_ok=True)
-        dir_str = filedialog.askdirectory(
-            parent=self,
-            title=f"选择批量导出目录（{label} · {len(selected)} 篇）",
-            initialdir=initial_dir,
-        )
-        if not dir_str:
-            return
-
-        self._batch_exporting = True
-        self.batch_export_btn.configure(state="disabled", text="导出中…")
-        self.set_hist_status(f"批量导出 {len(selected)} 篇为 {label}…", ok=True)
-        cred = dict(self._history_cred or {})
-
-        def worker() -> None:
-            try:
-                result = batch_export_articles(
-                    selected,
-                    out_dir=Path(dir_str),
-                    fmt=fmt_key,
-                    cred=cred or None,
-                    on_progress=lambda m: self.after(
-                        0, lambda msg=m: self.set_hist_status(msg, ok=True)
-                    ),
-                )
-                err = ""
-            except Exception as exc:  # noqa: BLE001
-                result = {"ok": 0, "failed": len(selected), "out_dir": dir_str}
-                err = describe_exception(exc)
-            self.after(0, lambda: self._on_batch_export_done(result, err, label))
-
-        threading.Thread(target=worker, name="schinza-batch-export", daemon=True).start()
-
-    def _on_batch_export_done(
-        self, result: dict[str, Any], err: str, label: str
-    ) -> None:
-        self._batch_exporting = False
-        self.batch_export_btn.configure(state="normal", text="批量导出")
-        if err:
-            self.set_hist_status(f"批量导出失败：{err}", ok=False)
-            return
-        ok_n = int(result.get("ok") or 0)
-        fail_n = int(result.get("failed") or 0)
-        out = result.get("out_dir") or ""
-        if fail_n > 0:
-            errors = list(result.get("errors") or [])
-            report = ""
-            try:
-                report_path = Path(out) / "导出失败清单.txt"
-                report_path.write_text(
-                    "\n".join(f"{i + 1}. {e}" for i, e in enumerate(errors)),
-                    encoding="utf-8",
-                )
-                report = f"；失败明细已写入 {report_path.name}"
-            except Exception:
-                report = ""
-            self.set_hist_status(
-                f"批量导出完成（{label}）：成功 {ok_n} · 失败 {fail_n} → {out}{report}",
-                ok=False,
-            )
-            return
-        self.set_hist_status(
-            f"批量导出完成（{label}）：成功 {ok_n} · 失败 {fail_n} → {out}",
-            ok=True,
-        )
 
     # ── tick / lifecycle ──────────────────────────────────────────────
 
