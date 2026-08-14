@@ -676,9 +676,6 @@ def fetch_history_days(
             break
         if raw_msg_count <= 0 and not batch:
             break
-        if not last_can_continue:
-            break
-
         nxt = page.get("next_offset")
         if nxt is None:
             nxt_i = offset + int(count)

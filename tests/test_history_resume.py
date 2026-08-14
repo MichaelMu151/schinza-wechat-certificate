@@ -34,19 +34,22 @@ def test_history_starts_from_checkpoint_and_reports_next_offset(monkeypatch) -> 
     assert result["hit_page_cap"] is True
 
 
-def test_history_stops_when_wechat_says_no_more(monkeypatch) -> None:
+def test_history_continues_when_flag_is_false_but_offset_advances(monkeypatch) -> None:
+    calls: list[int] = []
+
     def page(_cred, *, offset, **_kwargs):
+        calls.append(offset)
         return {
             "ok": True,
             "articles": [
                 {
-                    "title": "最后一篇",
-                    "link": "https://mp.weixin.qq.com/s/x",
+                    "title": f"文章 {offset}",
+                    "link": f"https://mp.weixin.qq.com/s/{offset}",
                     "publish_ts": 1704067200,
                 }
             ],
             "can_continue": False,
-            "next_offset": offset + 10,
+            "next_offset": offset + 10 if offset == 0 else offset,
             "raw": {"general_msg_list": {"list": [{}]}},
         }
 
@@ -54,7 +57,9 @@ def test_history_stops_when_wechat_says_no_more(monkeypatch) -> None:
     result = history_client.fetch_history_days(
         {"__biz": "biz", "uin": "uin", "key": "key"},
         days=None,
-        max_pages=1,
+        max_pages=10,
         sleep_s=0,
     )
+    assert calls == [0, 10]
+    assert len(result["articles"]) == 2
     assert result["hit_page_cap"] is False
