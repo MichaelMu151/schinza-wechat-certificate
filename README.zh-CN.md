@@ -2,370 +2,353 @@
   <img src="assets/logo.png" alt="Schinza" width="128" height="128" />
 </p>
 
-<h1 align="center">Schinza</h1>
+<h1 align="center">Schinza · 源码使用指南</h1>
 
 <p align="center">
   <a href="./README.md">English</a> · <a href="./README.zh-CN.md"><b>中文</b></a>
 </p>
 
 <p align="center">
-  <strong>微信公众号凭证与历史文章 Windows / macOS 桌面助手</strong>
-  <br />
-  捕获短暂客户端密钥 · 管理 30 分钟有效期 · 拉取近 7 / 30 / 90 天 / 全部 / 自定义天数历史 · 列表与正文多格式导出（HTML / Markdown / TXT / JSON / Word）· 批量导入（CSV/TXT）· 批量导出
+  在本机用 <b>Python 源码</b>启动桌面界面，从微信桌面捕获约 30 分钟有效的公众号凭证，<br />
+  翻页拉取历史列表，再慢速归档正文。不依赖发行版 App / DMG / exe。
 </p>
 
-> 本 fork 基于 Schinza 1.8.9，保留原有凭证捕获流程，并增加全历史跨重启续拉、
-> 大规模后台归档、SQLite 状态索引及与 `wechat_crawler` 的离线合并支持。
-
-<p align="center">
-  <a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases"><img src="https://img.shields.io/badge/下载-Releases-22C55E?style=flat-square" alt="Download" /></a>
-  <a href="#开源协议"><img src="https://img.shields.io/badge/License-MIT-3db89a?style=flat-square" alt="MIT License" /></a>
-  <a href="#运行环境"><img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20%7C%20macOS%2012%2B-1a212b?style=flat-square" alt="Platform" /></a>
-  <a href="#运行环境"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square" alt="Python" /></a>
-  <img src="https://img.shields.io/badge/UI-CustomTkinter-222b38?style=flat-square" alt="CustomTkinter" />
-</p>
-
-<p align="center">
-  <b><a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases">⬇ 下载最新发行版</a></b>
-</p>
-
-<p align="center">
-  <img src="assets/screenshot-credentials.png" alt="Schinza 凭证管理界面" width="860" />
-</p>
+> 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.2**）。  
+> 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
 
-## 下载
+## 这份指南解决什么问题
 
-**Windows (x64)** 与 **macOS（Apple Silicon arm64）** 预编译包发布在 GitHub Releases：
+学术存档需要「某个公众号的全部历史标题 + 正文」。微信把历史列表接口（`getmsg`）和文章网页分开了：
 
-**https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases**
+| 步骤 | 要不要 30 分钟凭证 | 速度 | 在哪做 |
+|------|-------------------|------|--------|
+| 捕获 `uin` / `key` | — | 一次抓包 | 本仓库源码 GUI |
+| 翻页拉历史**列表** | **要** | 约 1 秒/页 | 本仓库「历史文章」 |
+| 下载文章**正文** | **不要** | 8–15 秒/篇 | 本仓库「历史文章」 |
+| 写入原来的 SQLite | 不要 | 离线 | 同级仓库 `wechat_crawler` |
 
-| 平台 | 安装包 | 安装方式 |
-|---|---|---|
-| Windows x64 | `Schinza-windows-x64.zip` | 解压**整个** `Schinza` 文件夹，运行 `Schinza.exe`（保留 `_internal/`） |
-| macOS · Apple 芯片 | `Schinza-mac-arm64.dmg` / `.zip` | 打开 DMG 把 `Schinza.app` 拖入 Applications；首次启动「右键 → 打开」（未签名） |
+因此：**半小时窗口只用来翻页**。列表没拉完就先续约；正文可以等凭证过期后再慢慢下。不要用预编译 App 代替本分支源码。
 
-源码仓库：[Alexxxxxxxxxxxxy/schinza-wechat-certificate](https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate)
+推荐工作目录：
 
----
-
-## 项目简介
-
-**Schinza** 是一款开源 Windows / macOS 桌面工具，在本机完成公众号凭证与历史文章相关操作：
-
-| 模块 | 功能 |
-|------|------|
-| **凭证管理** | 安装随包 MITM CA、启动本地代理，从微信桌面捕获 `__biz` / `uin` / `key` / `pass_ticket`；每套凭证 **30 分钟**有效，支持续约 / 复制 JSON / **按名称搜索** |
-| **历史文章** | 拉取 **近 7 / 30 / 90 天 / 全部 / 自定义天数 / 自定义日期范围**历史；列表导出；单篇 / 批量正文导出；可选 **补录链接** |
-| **列表导出** | JSON · CSV（Excel）· TSV · Markdown · 纯链接 · 标题+链接 |
-| **正文导出** | 单篇或**批量**：**HTML** · **Markdown** · **TXT** · **JSON** · **Word (.docx)** |
-| **同步服务器** | 导入 Schinza 公众号列表 CSV；本地凭证按名称匹配后一键复制或分批上传（≤50/批）到**你自己的**开放接口服务器 |
-
-所有凭证与导出保存在本机 `data/`；应用不会自动上传，仅「同步服务器」页签会按你填写的服务器地址上传匹配到的凭证（**无内置默认地址，需自行填写**，如 `https://your-server.com/schinza`）。
+```text
+wechat-work/
+├── name_list.xlsx
+├── wechat_crawler/                      ← SQLite 离线合并
+└── schinza-wechat-certificate-main/     ← 本仓库（源码）
+```
 
 ---
 
-## 贡献者
+## 1. 运行环境
 
-<a href="https://github.com/meichiny"><img src="https://avatars.githubusercontent.com/meichiny?s=80" width="48" height="48" alt="meichiny" title="meichiny" /></a>
-<a href="https://github.com/Alexxxxxxxxxxxxy"><img src="https://avatars.githubusercontent.com/Alexxxxxxxxxxxxy?s=80" width="48" height="48" alt="Alexxxxxxxxxxxxy" title="Alexxxxxxxxxxxxy" /></a>
+- macOS 12+ 或 Windows 10/11
+- 已登录的**微信桌面客户端**（不要只用手机）
+- **Python 3.11+**，且必须带 Tk（GUI 依赖 `_tkinter`）
+- Git
+- 只处理你有权存档的公众号
 
-- [@meichiny](https://github.com/meichiny) — macOS 支持（跨平台代码、双架构打包、文档），见 [#4](https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/pull/4)
-- [@Alexxxxxxxxxxxxy](https://github.com/Alexxxxxxxxxxxxy) — 项目作者与维护者
+### Intel Mac 必读
 
----
+本机若是 Intel Mac，不要用 Homebrew 的 Python 3.13 跑 GUI：常见报错是 `ModuleNotFoundError: No module named '_tkinter'`。
 
-## 界面说明
+请使用 python.org 的官方安装包（当前实测可用 **Python 3.14**，带 Tk 9），虚拟环境目录约定为 `.venv-intel`：
 
-左侧栏切换（深色 slate + 绿色强调）：
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+.venv-intel/bin/python main.py
+```
 
-1. **凭证管理** — 安装 CA、代理、添加并抓包、倒计时卡片  
-2. **历史文章** — 选择公众号 · 时间范围 · 拉取 · 补录 · 浏览 · 导出  
-3. **同步服务器** — 服务器地址（必填）· 导入公众号列表 CSV · 匹配凭证 · 同步上传  
-
----
-
-## 运行环境
-
-- **Windows** 10 / 11（x64）
-- **macOS** 12.0+（Monterey 及以上——微信 Mac 版要求 macOS 12+；程序自身二进制仅需 11.0 (arm64)）
-- 微信**桌面版**（用于凭证捕获，Windows / macOS 均已实测；微信为 universal2 双架构安装包）
-- Python **3.11+**（开发 / 打包）
-- Windows 打包时需要 Python/conda 环境中的 OpenSSL DLL（`libssl` / `libcrypto`）；macOS 打包不需要额外 DLL
+不要用 `.venv-313` 或系统 `python3` 直接启动。
 
 ---
 
-## 快速开始（源码）
+## 2. 克隆本分支
 
-本仓库的“全历史续拉 / 后台归档全部”改版位于 `scalable-archive` 分支。
-请使用下面的 fork 地址和分支；原作者仓库的 `main` 不包含这些功能。
+```bash
+mkdir -p "$HOME/Desktop/wechat-work"
+cd "$HOME/Desktop/wechat-work"
 
-**Windows：**
+git clone --branch scalable-archive \
+  https://github.com/MichaelMu151/schinza-wechat-certificate.git \
+  schinza-wechat-certificate-main
+```
+
+之后更新（不要切到上游 `main`）：
+
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+git pull
+```
+
+确认版本：
+
+```bash
+# Intel Mac
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"
+# 应显示 1.9.2
+```
+
+Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
+
+---
+
+## 3. 安装依赖并启动（源码）
+
+入口永远是仓库根目录的 `main.py`。首次会打开 CustomTkinter 窗口。
+
+### 3.1 Intel macOS（推荐路径）
+
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+
+# 若还没有 .venv-intel：用官方 python.org 的 3.14
+/usr/local/bin/python3.14 -m venv .venv-intel
+.venv-intel/bin/python -m pip install --upgrade pip
+.venv-intel/bin/pip install -r requirements.txt
+
+.venv-intel/bin/python main.py
+```
+
+每次使用只需要最后一行。不要 `source` 进错误的 venv 后再跑。
+
+### 3.2 Apple Silicon macOS
+
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+
+python3 -m venv .venv-mac
+.venv-mac/bin/pip install --upgrade pip
+.venv-mac/bin/pip install -r requirements.txt
+.venv-mac/bin/python main.py
+```
+
+### 3.3 Windows
 
 ```powershell
-git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
-cd schinza-wechat-certificate
+cd $HOME\Desktop\wechat-work\schinza-wechat-certificate-main
 
 python -m venv .venv
 .\.venv\Scripts\Activate.ps1
+python -m pip install --upgrade pip
 pip install -r requirements.txt
-
-# 可选：复制完整 mitmproxy CA（含私钥）用于抓包/打包
-# 推荐：%USERPROFILE%\.mitmproxy\mitmproxy-ca.pem
-
 python main.py
 ```
 
-**macOS：**
-
-```bash
-git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
-cd schinza-wechat-certificate
-
-python3 -m venv .venv-mac
-.venv-mac/bin/pip install -r requirements.txt
-
-# 可选：复制完整 mitmproxy CA（含私钥）用于抓包/打包
-# 推荐：~/.mitmproxy/mitmproxy-ca.pem
-
-.venv-mac/bin/python main.py
-```
-
-> macOS 上首次「安装 CA 证书」会调用 `security` 命令，可能弹出系统密码框（输入本机密码即可）；代理设置与恢复使用 `networksetup`（自动识别当前网络服务）。
-
-### 如何确认启动的是改版
-
-源码启动入口仍是 `main.py`，不是另一个应用：
-
-```bash
-.venv-mac/bin/python main.py
-```
-
-启动后在“历史文章”页确认：
-
-- 凭证有效时主按钮是 **拉取列表并归档**，过期后变为 **继续归档正文**；没有文章卡片、全选或批量勾选；
-- 进度只显示篇数、页数、用时和正文成功/失败；
-- **30 分钟凭证只用来翻页拉列表**。正文是公开 HTML，不消耗 `uin`/`key`；
-- 窗口结束而列表未完时，请立即续约再点一次继续翻页；列表拉完后才会自动下正文；
-- 凭证过期后仍可对同一账号点 **继续归档正文**（已缓存的 URL）；
-- `data/history_cache.sqlite` 与 `data/archives/公众号名/` 会出现。
-
-也可在终端确认源码版本：
-
-```bash
-.venv-mac/bin/python -c "from app import __version__; print(__version__)"
-# 改版当前显示 1.9.2
-```
-
-### 首次抓包流程
-
-1. **凭证管理** → **安装 CA 证书** → **重启微信桌面**  
-2. 填写公众号名称 + 任意文章链接 → **添加并抓包**；或点 **批量导入**，选择 CSV/TXT（第一列公众号、第二列文章链接，逗号/Tab 分隔，自动识别表头）批量添加  
-3. 在微信桌面打开该公众号任意一篇文章  
-4. 卡片出现凭证（30 分钟）。过期后点 **续约**，在微信内刷新该号已打开文章（不弹系统浏览器）；多号同时打开时按 `__biz` 自动落到对应卡片  
-5. **历史文章** → 选择公众号（默认全部历史）→ 凭证有效时点 **拉取列表并归档**（本窗口只拉列表）。列表拉完后才会自动下正文；过期后可点 **继续归档正文**。无需勾选。
-
-归档目录结构：
-
-```text
-归档目录/
-├── manifest.json       # 完整文章目录，可用于 SQLite 离线合并
-├── manifest.jsonl      # 超大历史的流式目录；超过 1 万篇时以此为准
-├── articles/           # Markdown / HTML / TXT / JSON / Word 正文
-├── archive_index.sqlite# 大规模状态索引（WAL），快速判断已完成/失败
-├── job_state.jsonl     # 逐篇执行事件审计
-├── failures.jsonl      # 失败明细
-└── summary.json        # 本次执行汇总
-```
-
-遇到 `unknownerror`、HTTP 429 或“访问过于频繁”时，任务会立即暂停。请等待数小时到
-一天后再续跑。列表未完则先续约并点 **拉取列表并归档**；只补正文则等凭证过期后点
-**继续归档正文**。目录固定为 `data/archives/公众号名/`，已完成正文会自动跳过。
-不要提高并发或连续重试。
-
-### 降频与失败恢复
-
-正文归档固定为**单请求**，每篇之间随机等待 **8–15 秒**；不会同时下载多篇文章。
-短暂网络错误会在 12–30 秒、随后更长的间隔后最多重试两次。连续三篇最终失败时，
-程序会自动冷却 1–2 分钟再继续；界面会显示“重试”和“冷却”状态。
-
-这能降低突发请求带来的风险，但不能绕过微信风控。若出现 HTTP 429、
-`unknownerror` 或“访问过于频繁”，任务会立即停止而非硬重试；等待数小时至一天、
-刷新凭证后再续跑。
+启动后左侧应能看到三个页签：**凭证管理**、**历史文章**、**同步服务器**。  
+「历史文章」页主按钮在凭证有效时应为 **拉取列表并归档**，过期后变为 **继续归档正文**；没有文章卡片、全选或勾选框。
 
 ---
 
-## 常见问题（拉取报错）
+## 4. 第一次抓包（必须按顺序）
 
-### 「unknown error / unknownerror」
-这是**微信服务端风控返回**（`ret=-6, errmsg=unknownerror`），**不是**本地网络或代理问题：
-账号/会话被微信识别为异常，拒绝返回文章列表。
+凭证来自微信桌面内置浏览器访问公众号时的短期参数：`__biz`、`uin`、`key`、`pass_ticket`。本程序在本机 `127.0.0.1:8088` 开一个 MITM 代理把它们截下来。**不会把密钥上传到任何默认服务器。**
 
-- **先排查**（网络/代理）：打开 设置 → 网络和 Internet → 代理 → 手动设置代理 → 关闭，重启应用；
-  重装能解决往往只是清掉了残留代理状态。
-- **如果网络/代理正常仍出现**：说明是账号被风控。请：
-  - 降低拉取频率，**不要**连续开「全部」或批量拉取多个公众号
-  - 稍等一段时间再试（几小时到一天）
-  - 仍持续出现 → 换一个微信账号重新抓包（避免用主力号）
-- 1.7.4 起程序会显示具体原因（如「微信风控拒绝」「连接微信超时」），不再是无脑 unknown error。
+### 4.1 安装 CA 并重启微信
 
-### 「连接微信超时 / 网络错误」
-直连 `mp.weixin.qq.com` 失败：检查网络、关闭残留代理、重启应用；程序已自动重试 2 次。
+1. 打开 **凭证管理**。
+2. 点 **安装 CA 证书**。macOS 会调用 `security`，可能要输入本机登录密码。
+3. **完全退出微信桌面**（菜单栏图标也要退出），再重新打开。只刷新文章页不够，代理和证书必须在微信启动时就生效。
 
-### 一键续约全部 / 续约没反应
-续约依赖微信产生**带完整凭证**的请求（URL 里含 `__biz`+`uin`+`key`，如 getappmsgext / getmsg）。
-只是刷新已打开的旧文章页可能不产生这类请求。请：
+可选：若本机已有完整 mitmproxy CA（含私钥），可放在 `~/.mitmproxy/mitmproxy-ca.pem`。不要把私钥提交 Git 或发给别人。
 
-1. 点续约后，**先重启微信**（让新代理/证书生效）
-2. **重新打开**该公众号文章（不要只刷新旧页面），或**滚动公众号历史消息页**触发 getmsg
-3. 若仍没反应，查看 `data/capture_debug.log`：
-   - 有「截获…凭证不完整」→ 流量到了代理但缺 key，请滚动历史消息页
-   - 日志为空 → 微信流量没走代理，重启微信后再试
-   - 有「凭证已保存」→ 已捕获，等待自动入库
+### 4.2 添加一个公众号
 
-### 「凭证已失效 / 会话异常」
-凭证 30 分钟有效，过期后请重新抓包/续约。
+1. 名称必须与日后 `name_list.xlsx` 的 `nickname` **逐字一致**（含空格、医院全称）。
+2. 「文章链接」填该号任意一篇公开文章 URL（短链也可以）。
+3. 点 **添加并抓包**。卡片状态会变成等待捕获。
 
-## 打包 Windows 发行版
+批量：可用 **批量导入**（CSV/TXT，第一列公众号名、第二列文章链接，逗号或 Tab 分隔，自动识别表头）。第一次建议只加一个号，跑通再批量。
 
-```powershell
-.\build.ps1
-```
+### 4.3 在微信里触发完整凭证
 
-```text
-dist\Schinza\Schinza.exe
-```
+1. 回到**微信桌面**，打开该公众号的一篇文章（建议重新打开，不要只刷新旧标签）。
+2. 若仍无完整 `key`，进入该号历史消息页并**向下滚动**，促使微信发出 `getmsg`。
+3. Schinza 卡片应变为 active，并出现约 **30 分钟**倒计时。
 
-请分发**整个** `dist\Schinza` 文件夹。构建可抓包二进制需要带私钥的 CA — **切勿将私钥提交到公开仓库**。
+看 `data/capture_debug.log`：
 
-## 打包 macOS 发行版
+| 日志 | 含义 |
+|------|------|
+| 「凭证已保存」 | 已捕获，等待界面刷新 |
+| 「截获…凭证不完整」 | 流量到了代理但缺 `key`，去滚动历史页 |
+| 文件为空 | 微信没走代理 → 再退出并重启微信 |
 
-```bash
-./build_mac.sh
-```
+凭证写入 `data/accounts.json`。其中含短期密钥，**不要提交 Git、不要上传网盘、不要发给他人**。
 
-```text
-dist/Schinza.app
-```
+### 4.4 退出后网络异常
 
-脚本会：创建 `.venv-mac` 虚拟环境 → 从 `~/.mitmproxy` 复制 CA → 用 `sips` + `iconutil` 生成 `.icns` 图标 → PyInstaller 打包为 `Schinza.app`，并额外生成 `dist/Schinza-mac-arm64.dmg`（UDZO 压缩格式，内含 Applications 快捷方式，双击挂载后拖入 Applications 即安装）。构建可抓包二进制需要带私钥的 CA — **切勿将私钥提交到公开仓库**。
-
-> 当前打包产物为 **Apple Silicon (arm64)** 单架构。未签名 .app 在他人机器上首次打开需「右键 → 打开」绕过 Gatekeeper；正式分发建议使用 Apple Developer ID 签名 + 公证（Notarization）。
-
-### macOS 系统要求（.app / .dmg 产物）
-
-- **Apple Silicon Mac**（M1 及更新）——CI 发布的安装包为 arm64 版
-- **macOS 12.0 (Monterey)** 或更高版本——微信 Mac 4.x 要求 macOS 12+；程序自身二进制仅需 11.0 (arm64)
-- 已安装**微信 Mac 版**（用于凭证捕获；微信为 universal2 双架构，两种芯片均可运行）
-- 需要**管理员权限**的账号（安装信任根证书、设置系统代理时会弹出密码框）
-- 建议 300MB 磁盘空间、2GB 以上可用内存
-
-CI 暂不发布 Intel (x86_64) 版（Intel 的 `macos-13` runner 已退役）。本地可自行用 `./build_mac_x64.sh` 构建（基于 Rosetta 创建 x86_64 虚拟环境，需 Rosetta 2 与 python.org 的 universal2 Python）→ 产出 `dist/Schinza-x64.app` / `dist/Schinza-mac-x64.dmg`。
+正常退出 Schinza 会恢复系统代理。若浏览器上不了网：关闭系统「手动代理」，确认不再指向 `127.0.0.1:8088`，再重启 Schinza / 微信。
 
 ---
 
-## 目录结构
+## 5. 拉列表和下正文（效率关键）
+
+打开 **历史文章**：
+
+1. 选择刚抓到的公众号（下拉框会显示「列表窗口剩余 …」）。
+2. 时间范围默认 **全部历史**（也可近 7 / 30 / 90 天或自定义）。
+3. 点 **拉取列表并归档**。
+
+界面只显示篇数、页数、用时和正文进度，无需勾选。
+
+### 程序实际在做什么
+
+1. **凭证有效时只翻页。** `getmsg` 需要 `uin`/`key`。每页约 1 秒，半小时可以缓存几千条 URL 到 `data/history_cache.sqlite`。窗口结束前约 90 秒会停止再开新页，避免用过期 key 请求。
+2. **列表拉完后才自动下正文。** 正文是公开 HTML，不带过期 cookie（过期 cookie 可能把公开页打成登录页）。单请求，每篇随机等待 **8–15 秒**。
+3. **列表没拉完而窗口到了：** 不开始数小时正文任务，以便你立刻续约继续翻页。状态会提示缓存了多少篇。
+4. **凭证已过期、列表已在本地：** 按钮变成 **继续归档正文**，可慢慢把已缓存 URL 下完。
+
+一个发文很多的号，列表往往要 **好几轮 30 分钟**。正文可以放到夜里跑，两者不要抢同一段凭证时间。
+
+### 续约后再拉列表
+
+1. 在 **凭证管理** 点该号 **续约**（不会弹出系统浏览器）。
+2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
+3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
+
+### 正文节奏与风控
+
+- 不会并发下载多篇。
+- 短暂网络错误：最多再试 2 次（间隔加长）。
+- 连续三篇最终失败：冷却 1–2 分钟再继续。
+- 出现 HTTP **429**、`unknownerror`、或页面写「访问过于频繁」：**立即停**，等数小时到一天。不要提高并发、不要连点重试。
+- 续跑同一账号即可：已写入 `data/archives/公众号名/` 的正文会跳过。
+
+---
+
+## 6. 归档目录（给 SQLite 用）
 
 ```text
-├── assets/
-├── app/
-│   ├── ui.py                 # CustomTkinter 界面
-│   ├── mitm_capture.py       # 进程内 mitmproxy
-│   ├── mitm_addon.py         # 凭证 + 文章目击
-│   ├── history_client.py     # getmsg + 补录合并
-│   ├── history_ranges.py     # 7 / 30 / 90 天 / 全部 / 自定义
-│   ├── history_export.py     # 列表导出
-│   ├── article_reader.py     # 正文 HTML / MD / TXT / JSON
-│   ├── sightings.py          # 补录 / 抓包目击存储
-│   ├── credentials.py
-│   ├── store.py
-│   └── ca_setup.py
-├── tests/
-├── main.py
-├── build.ps1
-├── build_mac.sh
-├── Schinza.spec
-├── Schinza-mac.spec
+data/archives/公众号名/
+├── manifest.json        # 目录；wechat_crawler 的 --manifest 指向这里
+├── manifest.jsonl       # 超过约 1 万篇时以这个为准
+├── articles/            # 正文文件（默认 Markdown）
+├── archive_index.sqlite # 已完成 / 失败索引，用于续跑
+├── job_state.jsonl      # 逐篇事件
+├── failures.jsonl       # 失败明细
+└── summary.json         # 汇总
+```
+
+这些文件不含微信短期密钥。不要删 `history_cache.sqlite` 或该归档目录，否则续跑会丢失进度。
+
+---
+
+## 7. 合并进原来的 SQLite
+
+在线工作到此结束。把结果交给同级的 `wechat_crawler`（完全离线，不再访问微信）：
+
+```bash
+cd "$HOME/Desktop/wechat-work/wechat_crawler"
+source .venv/bin/activate
+python run.py import-list
+python run.py import-schinza-export \
+  --manifest "../schinza-wechat-certificate-main/data/archives/公众号名称/manifest.json" \
+  --articles-dir "../schinza-wechat-certificate-main/data/archives/公众号名称/articles" \
+  --dry-run
+# 确认 matched_account=true 后去掉 --dry-run
+python run.py status
+```
+
+详细命令、表结构与分析示例见 [`wechat_crawler` README](https://github.com/MichaelMu151/wechat_crawler/blob/cursor/wechat-archive-enhancements/README.md)。  
+公众号名称必须与 `name_list.xlsx` 以及本程序卡片上的名称完全一致。
+
+---
+
+## 8. 常见问题
+
+### `ModuleNotFoundError: No module named '_tkinter'`
+
+用了不带 Tk 的 Python（Intel Mac 上常见于 Homebrew 3.13）。改用第 3.1 节的 `.venv-intel`（python.org 3.14）。
+
+### 点了启动但界面和发行版一样，没有「拉取列表并归档」
+
+跑的不是本分支源码。确认：
+
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+git branch --show-current    # 应为 scalable-archive
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.2
+.venv-intel/bin/python main.py
+```
+
+不要从 Applications 里的 `Schinza.app` 启动。
+
+### unknownerror / ret=-6
+
+这是微信服务端风控，不是本地代理坏了。先确认系统手动代理已关且网页能打开；若仍出现：停数小时到一天，不要对多个号连开「全部历史」。持续出现可换一个微信账号抓包（避免主力号）。
+
+### 续约没反应
+
+续约依赖微信发出带 `__biz`+`uin`+`key` 的请求。只刷新旧文章页往往不够：重启微信 → 重新打开文章或滚动历史页 → 看 `data/capture_debug.log`。
+
+### 凭证已失效
+
+列表接口 30 分钟过期。过期后仍可 **继续归档正文**；要接着翻页必须先续约。
+
+### 历史文章下拉框没有该号
+
+先在凭证管理抓过包（哪怕已过期）。过期号会显示「凭证已过期，可继续归档正文」。若从未捕获到 `__biz`，需要重新添加并抓包。
+
+---
+
+## 9. 安全与使用规范
+
+- 仅在你有权操作的账号与设备上使用；遵守微信 / 腾讯服务条款与相关法律。
+- 勿公开 CA 私钥，勿泄露 `uin` / `key` / `pass_ticket`。
+- 只存标题、作者、时间、正文等存档字段，不抓阅读量 / 点赞。
+- 历史请求绕过系统 MITM 代理（`trust_env=False`），避免抓包代理干扰正文下载。
+- 同步服务器页签没有内置地址；只有你自己填写 URL 时才会上传匹配到的凭证。
+
+---
+
+## 10. 目录结构（源码）
+
+```text
+├── main.py                 # 唯一启动入口
 ├── requirements.txt
-├── LICENSE
-├── README.md
-└── README.zh-CN.md
+├── app/
+│   ├── ui.py               # 桌面界面
+│   ├── mitm_capture.py     # 本机代理
+│   ├── mitm_addon.py       # 截凭证
+│   ├── history_client.py   # getmsg 翻页
+│   ├── history_pipeline.py # 列表优先，再归档正文
+│   ├── history_cache.py    # data/history_cache.sqlite
+│   ├── archive_job.py      # 慢速正文
+│   ├── article_reader.py   # 解析公开文章 HTML
+│   └── store.py            # data/accounts.json
+├── data/                   # 本地数据，勿提交
+└── tests/
 ```
 
----
+```bash
+.venv-intel/bin/python -m pytest tests -q
+```
 
-## 导出格式
-
-**历史列表：** JSON · CSV · TSV · Markdown · 纯链接 · 标题+链接  
-
-**单篇 / 批量正文：** HTML · Markdown · TXT · JSON · Word (.docx)  
+请勿提交 `data/*.json`、`data/*.sqlite`、`.venv*`、`dist/` 或 CA 私钥。
 
 ---
 
-## 安全与使用规范
+## 附录：打包发行版（可选）
 
-- 凭证短时有效，仅存本机 `data/accounts.json`  
-- 历史拉取绕过系统 MITM 代理（`trust_env=False`）  
-- 仅在您有权操作的账号与设备上使用  
-- 遵守微信 / 腾讯服务条款及相关法律  
-- 勿公开私有 CA 密钥或真实 `uin` / `key` / `pass_ticket`  
-- 他人滥用与作者无关（见[免责声明](#免责声明)）
-
----
-
-## 配置说明
-
-| 项 | 说明 |
-|----|------|
-| 代理 | 抓包运行时为 `127.0.0.1:8088` |
-| 有效期 | 每套凭证 30 分钟 |
-| 历史窗口 | 近 7 / 30 / 90 天 / 全部 / 自定义天数 |
-| 同步服务器地址 | 必填、无内置默认值，如 `https://your-server.com/schinza` |
-| getmsg 接口 | `https://mp.weixin.qq.com/mp/profile_ext?action=getmsg` |
-| 发行版下载 | https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases |
-
----
-
-## 开发
+日常请用源码。若要自己打安装包：
 
 ```powershell
-.\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
-python main.py
+.\build.ps1          # Windows → dist\Schinza\Schinza.exe（分发整个文件夹）
 ```
 
-欢迎 PR。请勿提交 `data/*.json`、`dist/`、`.venv/`、`.venv-mac/` 或 CA 私钥。
-
----
-
-## 开源协议
-
-本项目基于 [MIT License](LICENSE) 开源。
-
-```text
-Copyright (c) 2026 Schinza Contributors
+```bash
+./build_mac.sh       # Apple Silicon → dist/Schinza.app
+./build_mac_x64.sh   # Intel，需 Rosetta 2 与 python.org universal2 Python
 ```
 
----
-
-## 免责声明
-
-本项目**仅作为开源软件**提供，供学习、研究与合法自用参考。
-
-- 下载、复制、修改或使用即视为已了解风险，并**自行承担全部责任与后果**。
-- 作者及贡献者**不对**因使用或滥用导致的损失、封禁、纠纷、泄露等承担责任。
-- **其他人实施的危险、滥用、违法或违规行为，与作者无关。**
-- Schinza **与**腾讯或微信**无关联、背书或赞助关系**。
-
-**若不同意以上声明，请勿使用本软件。**
+构建可抓包二进制需要带私钥的 CA，**切勿把私钥推进公开仓库**。上游 Releases 是原作者的包，不是本 fork 的 `scalable-archive`。
 
 ---
 
-<p align="center">
-  <a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases"><b>下载</b></a>
-  ·
-  <a href="./README.md">English</a>
-  ·
-  <a href="./README.zh-CN.md"><b>中文</b></a>
-</p>
+## 开源协议与免责声明
+
+[MIT License](LICENSE)。本软件仅供学习、研究与合法自用。下载或运行即视为自行承担后果；作者不对封禁、泄露或第三方滥用负责。Schinza 与腾讯 / 微信无关联。不同意请勿使用。

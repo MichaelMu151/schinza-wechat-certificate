@@ -2,349 +2,237 @@
   <img src="assets/logo.png" alt="Schinza" width="128" height="128" />
 </p>
 
-<h1 align="center">Schinza</h1>
+<h1 align="center">Schinza · run from source</h1>
 
 <p align="center">
   <a href="./README.md"><b>English</b></a> · <a href="./README.zh-CN.md">中文</a>
 </p>
 
 <p align="center">
-  <strong>Windows / macOS desktop helper for WeChat Official Account credentials &amp; history</strong>
-  <br />
-  Capture short-lived MP keys · 30‑minute TTL · Fetch 7 / 30 / 90‑day, all, or custom‑day history · Export list &amp; full articles (HTML / Markdown / TXT / JSON / Word) · Batch import (CSV/TXT) · Batch export
+  Start the desktop UI with <b>Python</b> (<code>main.py</code>). Capture ~30‑minute
+  Official Account credentials from WeChat Desktop, page the history list, then
+  archive article bodies slowly. This fork is meant to be run from source — not
+  from the upstream DMG / exe.
 </p>
 
-> This fork is based on Schinza 1.8.9. It preserves the original credential
-> capture flow and adds cross-restart full-history paging, scalable background
-> archiving, SQLite state indexes, and offline `wechat_crawler` integration.
+> Based on upstream Schinza 1.8.9. Feature branch:
+> [`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)
+> (version **1.9.2**). Upstream `main` and GitHub Releases **do not** include
+> full-history resume or list-first archiving.
 
-<p align="center">
-  <a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases"><img src="https://img.shields.io/badge/Download-Releases-22C55E?style=flat-square" alt="Download" /></a>
-  <a href="#license"><img src="https://img.shields.io/badge/License-MIT-3db89a?style=flat-square" alt="MIT License" /></a>
-  <a href="#requirements"><img src="https://img.shields.io/badge/Platform-Windows%2010%2F11%20%7C%20macOS%2012%2B-1a212b?style=flat-square" alt="Platform" /></a>
-  <a href="#requirements"><img src="https://img.shields.io/badge/Python-3.11%2B-3776AB?style=flat-square" alt="Python" /></a>
-  <img src="https://img.shields.io/badge/UI-CustomTkinter-222b38?style=flat-square" alt="CustomTkinter" />
-</p>
-
-<p align="center">
-  <b><a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases">⬇ Download latest release</a></b>
-</p>
-
-<p align="center">
-  <img src="assets/screenshot-credentials.png" alt="Schinza Credential Manager" width="860" />
-</p>
+The step-by-step Chinese guide is the canonical walkthrough:
+[README.zh-CN.md](./README.zh-CN.md). This page is the English counterpart.
 
 ---
 
-## Download
+## What this tool does
 
-Prebuilt packages for **Windows (x64)** and **macOS (Apple Silicon arm64)** are published on GitHub Releases:
+| Step | Needs 30‑min `uin`/`key`? | Speed | Where |
+|------|---------------------------|-------|--------|
+| Capture credentials | — | once | this repo, source GUI |
+| Page history **list** | **yes** | ~1 s/page | History tab |
+| Download article **bodies** | **no** | 8–15 s/article | History tab |
+| Merge into legacy SQLite | no | offline | sibling `wechat_crawler` |
 
-**https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases**
+Use the half-hour window **only for paging**. If the list is incomplete, renew
+and continue. Bodies can wait until credentials expire.
 
-| Platform | Asset | Install |
-|---|---|---|
-| Windows x64 | `Schinza-windows-x64.zip` | Extract the **whole** `Schinza` folder and run `Schinza.exe` (keep `_internal/`) |
-| macOS · Apple Silicon | `Schinza-mac-arm64.dmg` / `.zip` | Open the DMG and drag `Schinza.app` into Applications; first launch: right-click → Open (unsigned) |
+Suggested layout:
 
-Source repository: [Alexxxxxxxxxxxxy/schinza-wechat-certificate](https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate)
-
----
-
-## Overview
-
-**Schinza** is an open-source Windows / macOS desktop tool for local WeChat Official Account (公众号) ops:
-
-| Module | What it does |
-|--------|----------------|
-| **Credential Manager** | Install bundled MITM CA, start local proxy, capture `__biz` / `uin` / `key` / `pass_ticket` from WeChat Desktop; **30‑minute TTL** with renew / copy JSON / **search by name** |
-| **History Articles** | Fetch **7 / 30 / 90‑day / all / custom‑day / custom date‑range** history; list export; per‑article or batch body export; optional **URL补录** |
-| **List export** | JSON · CSV (Excel) · TSV · Markdown · plain links · title+link |
-| **Article export** | Per-article or **batch**: **HTML** · **Markdown** · **TXT** · **JSON** · **Word (.docx)** |
-| **Sync Server** | Import Schinza OA list CSV; match local valid credentials by name, then copy or batch upload (≤ 50/batch) to your own open API server |
-
-All credentials and exports stay under local `data/`. The app never uploads automatically — only the **Sync Server** tab can upload matched credentials to the server address you fill in yourself (**no built-in default; you must enter it, e.g. `https://your-server.com/schinza`**).
-
----
-
-## Contributors
-
-<a href="https://github.com/meichiny"><img src="https://avatars.githubusercontent.com/meichiny?s=80" width="48" height="48" alt="meichiny" title="meichiny" /></a>
-<a href="https://github.com/Alexxxxxxxxxxxxy"><img src="https://avatars.githubusercontent.com/Alexxxxxxxxxxxxy?s=80" width="48" height="48" alt="Alexxxxxxxxxxxxy" title="Alexxxxxxxxxxxxy" /></a>
-
-- [@meichiny](https://github.com/meichiny) — macOS support (cross-platform code, dual-arch packaging, docs) via [#4](https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/pull/4)
-- [@Alexxxxxxxxxxxxy](https://github.com/Alexxxxxxxxxxxxy) — project author & maintainer
-
----
-
-## UI
-
-Sidebar navigation (dark slate + green accent):
-
-1. **Credential Manager** — CA install, proxy, add & capture, countdown cards  
-2. **History Articles** — account · time range · fetch ·补录 · browse · export  
-3. **Sync Server** — server URL (required) · import OA list CSV · match credentials · upload  
+```text
+wechat-work/
+├── name_list.xlsx
+├── wechat_crawler/
+└── schinza-wechat-certificate-main/   ← this repo
+```
 
 ---
 
 ## Requirements
 
-- **Windows** 10 / 11 (x64)
-- **macOS** 12.0+ (Monterey or later — WeChat Mac requires macOS 12+; the bundle's own binaries need only 11.0 (arm64))
-- WeChat **Desktop** (for credential capture; verified on both Windows & macOS)
-- Python **3.11+** (development / build)
-- For Windows packaging: OpenSSL DLLs from your Python/conda env (`libssl` / `libcrypto`); macOS packaging needs no extra DLLs
+- macOS 12+ or Windows 10/11
+- WeChat **Desktop** signed in
+- Python **3.11+ with Tk** (`_tkinter`)
+- Git
+- Only accounts you are allowed to archive
+
+**Intel Mac:** Homebrew Python 3.13 often has no `_tkinter`. Use python.org
+**Python 3.14** and the `.venv-intel` environment:
+
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+.venv-intel/bin/python main.py
+```
+
+Do not launch `.venv-313` or a brew `python3`.
 
 ---
 
-## Quick start (from source)
-
-The full-history and background-archive changes live on this fork's
-`scalable-archive` branch. The upstream `main` branch does not include them.
-
-**Windows:**
-
-```powershell
-git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
-cd schinza-wechat-certificate
-
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r requirements.txt
-
-# Optional: full mitmproxy CA (with private key) for capture/packaging
-# Prefer: %USERPROFILE%\.mitmproxy\mitmproxy-ca.pem
-
-python main.py
-```
-
-**macOS:**
+## Clone this branch
 
 ```bash
-git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
-cd schinza-wechat-certificate
-
-python3 -m venv .venv-mac
-.venv-mac/bin/pip install -r requirements.txt
-
-# Optional: full mitmproxy CA (with private key) for capture/packaging
-# Prefer: ~/.mitmproxy/mitmproxy-ca.pem
-
-.venv-mac/bin/python main.py
+mkdir -p "$HOME/Desktop/wechat-work"
+cd "$HOME/Desktop/wechat-work"
+git clone --branch scalable-archive \
+  https://github.com/MichaelMu151/schinza-wechat-certificate.git \
+  schinza-wechat-certificate-main
 ```
 
-> On macOS, the first **Install CA** uses the `security` command and may prompt for your login password; system proxy setup/restore uses `networksetup` (the active network service is detected automatically).
-
-### Confirm the scalable version
-
-The source entry point remains `main.py`. On the History page the primary
-button is **拉取列表并归档** while credentials are valid, or **继续归档正文**
-after they expire. There are no article cards or checkboxes; the UI shows
-article count, pages, elapsed time, and body progress.
-
-The 30-minute `uin`/`key` window is used **only to page getmsg**. Public
-article HTML does not need those keys, so body downloads never compete with
-listing. If the window ends before the list is complete, the URLs stay in
-`data/history_cache.sqlite` — renew immediately and click again to keep
-paging. After the list is complete (or after expiry, via **继续归档正文**),
-bodies are written to `data/archives/<account>/` without credentials.
+Updates: `git pull` on `scalable-archive`. Check version:
 
 ```bash
-.venv-mac/bin/python -c "from app import __version__; print(__version__)"
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"
 # 1.9.2
 ```
 
-### First-time capture flow
-
-1. **Credential Manager** → **Install CA** → restart WeChat Desktop  
-2. Account name + any article URL → **Add & Capture**; or use **Batch Import** to load a CSV/TXT (column 1 = OA name, column 2 = article URL; comma/tab separated, header auto-detected)  
-3. Open any article from that OA in WeChat Desktop  
-4. Credentials appear (30‑minute TTL). **Renew** does not open a system browser — refresh the already-open article in WeChat; multi-OA traffic is routed by `__biz`  
-5. **History Articles** → pick the account (default: all history) → **拉取列表并归档** while the 30-minute window is live. Listing runs automatically. Bodies start only after the list is complete, or later via **继续归档正文** once credentials expire. No selection is required.
-
-### Conservative body downloads
-
-Body downloads use one request at a time with a randomized **8–15 second**
-interval. Transient network failures retry up to twice with increasing waits;
-three final failures in a row trigger a 1–2 minute cooldown. The progress view
-shows retries and cooldowns.
-
-This reduces request bursts but does not bypass WeChat risk controls. HTTP 429,
-`unknownerror`, and frequency-limit pages stop the job immediately. Wait hours
-to a day, refresh credentials, then run the same account again to resume.
-
 ---
 
-## Troubleshooting (fetch errors)
+## Install and start
 
-### "unknown error / unknownerror"
-This is **WeChat server-side risk control** (`ret=-6, errmsg=unknownerror`), **not** a local
-network/proxy issue: WeChat has flagged the account/session as abnormal and refuses to return
-the article list.
+Entry point is always `main.py`.
 
-- **First check** (network/proxy): Settings → Network & Internet → Proxy → turn off manual proxy,
-  then restart the app. A reinstall often just clears leftover proxy state.
-- **If network/proxy is fine and it still happens**: the account is rate-limited/flagged. Please:
-  - Lower fetch frequency; avoid repeated "All" or bulk fetches across many accounts
-  - Wait a while (hours to a day) and retry
-  - If it persists, capture with a different WeChat account (avoid your main account)
-- Since 1.7.4 the app shows the real reason (e.g. "微信风控拒绝" / "连接微信超时") instead of a bare unknown error.
-
-### "连接微信超时 / 网络错误" (timeout / network error)
-Direct connection to `mp.weixin.qq.com` failed: check your network, clear leftover proxy,
-restart the app. The app already retries twice automatically.
-
-### "Renew all" / renew does nothing
-Renewal depends on WeChat emitting a request that carries **complete credentials**
-(`__biz`+`uin`+`key` in the URL, e.g. getappmsgext / getmsg). Just refreshing an
-already-open article page may not produce such a request. Please:
-
-1. After starting renewal, **restart WeChat** (so the new proxy/CA takes effect)
-2. **Re-open** the article (not just refresh an old tab), or **scroll the OA history
-   page** to trigger getmsg
-3. Still nothing? Check `data/capture_debug.log`:
-   - "截获…凭证不完整" → traffic reaches the proxy but lacks `key`; scroll the history page
-   - empty log → WeChat traffic isn't going through the proxy; restart WeChat and retry
-   - "凭证已保存" → captured; wait for auto-apply
-
-### "凭证已失效 / 会话异常" (expired / invalid session)
-Credentials are valid for 30 minutes — re-capture / renew before fetching.
-
-## Build Windows release
-
-```powershell
-.\build.ps1
-```
-
-```text
-dist\Schinza\Schinza.exe
-```
-
-Distribute the **whole** `dist\Schinza` folder. Private CA material is required for a capture-capable binary — **never commit private keys**.
-
-## Build macOS release
+**Intel macOS**
 
 ```bash
-./build_mac.sh
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+/usr/local/bin/python3.14 -m venv .venv-intel
+.venv-intel/bin/python -m pip install --upgrade pip
+.venv-intel/bin/pip install -r requirements.txt
+.venv-intel/bin/python main.py
 ```
 
-```text
-dist/Schinza.app
+**Apple Silicon macOS**
+
+```bash
+python3 -m venv .venv-mac
+.venv-mac/bin/pip install -r requirements.txt
+.venv-mac/bin/python main.py
 ```
 
-The script creates a `.venv-mac` virtualenv → copies the CA from `~/.mitmproxy` → generates `.icns` via `sips` + `iconutil` → runs PyInstaller to produce `Schinza.app`. It also builds `dist/Schinza-mac-arm64.dmg` (UDZO, with an Applications symlink for drag-to-install). Private CA material is required for a capture-capable binary — **never commit private keys**.
-
-> The built bundle is currently **Apple Silicon (arm64)** only. Unsigned `.app` binaries need "right-click → Open" on other machines to bypass Gatekeeper; for wide distribution, sign with an Apple Developer ID and notarize.
-
-### System requirements (macOS bundle)
-
-- **Apple Silicon Mac** (M1 or later) — CI releases ship an arm64 bundle
-- **macOS 12.0 (Monterey)** or later — WeChat Mac 4.x requires macOS 12+; the bundle's own binaries require only 11.0 (arm64)
-- **WeChat Mac** desktop app installed (required for credential capture; WeChat ships a universal2 build for both architectures)
-- An **administrator account** — installing the trust root and setting the system proxy prompt for the login password
-- ~300 MB free disk space; 2 GB+ free memory recommended
-
-CI does **not** publish an Intel (x86_64) bundle (the Intel `macos-13` runner was retired). Local users can build one with `./build_mac_x64.sh` — a Rosetta x86_64 venv that produces `dist/Schinza-x64.app` / `dist/Schinza-mac-x64.dmg` (requires Rosetta 2 and a universal2 python.org Python).
-
----
-
-## Project layout
-
-```text
-├── assets/
-├── app/
-│   ├── ui.py                 # CustomTkinter UI
-│   ├── mitm_capture.py       # In-process mitmproxy
-│   ├── mitm_addon.py         # Creds + article sightings
-│   ├── history_client.py     # getmsg + sighting merge
-│   ├── history_ranges.py     # 7 / 30 / 90 / all / custom day presets
-│   ├── history_export.py     # List export formats
-│   ├── article_reader.py     # Article HTML / MD / TXT / JSON
-│   ├── sightings.py          # Local补录 / MITM sightings store
-│   ├── credentials.py
-│   ├── store.py
-│   └── ca_setup.py
-├── tests/
-├── main.py
-├── build.ps1
-├── build_mac.sh
-├── Schinza.spec
-├── Schinza-mac.spec
-├── requirements.txt
-├── LICENSE
-├── README.md
-└── README.zh-CN.md
-```
-
----
-
-## Export formats
-
-**History list:** JSON · CSV · TSV · Markdown · plain links · title+link  
-
-**Single / batch article:** HTML · Markdown · TXT · JSON · Word (.docx)  
-
----
-
-## Security & ethics
-
-- Short-lived credentials in `data/accounts.json` only  
-- History fetch bypasses the system MITM proxy (`trust_env=False`)  
-- Use only on accounts/devices you are authorized to operate  
-- Respect WeChat / Tencent terms and applicable laws  
-- Do not publish private CA keys or live `uin` / `key` / `pass_ticket`  
-- Authors are not responsible for misuse (see [Disclaimer](#disclaimer))
-
----
-
-## Configuration notes
-
-| Item | Detail |
-|------|--------|
-| Proxy | `127.0.0.1:8088` while capture is running |
-| TTL | 30 minutes per credential |
-| History window | 7 / 30 / 90 / all / custom days |
-| Sync server URL | Required, no built-in default — fill in e.g. `https://your-server.com/schinza` |
-| getmsg API | `https://mp.weixin.qq.com/mp/profile_ext?action=getmsg` |
-| Releases | https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases |
-
----
-
-## Development
+**Windows**
 
 ```powershell
+python -m venv .venv
 .\.venv\Scripts\Activate.ps1
-python -m pip install -r requirements.txt
+pip install -r requirements.txt
 python main.py
 ```
 
-Contributions welcome via PR. Do not commit `data/*.json`, `dist/`, `.venv/`, `.venv-mac/`, or CA private keys.
+On the History tab the primary button is **拉取列表并归档** while credentials
+are valid, and **继续归档正文** after they expire. There are no article cards
+or checkboxes.
 
 ---
 
-## License
+## First capture
 
-[MIT License](LICENSE) — Copyright (c) 2026 Schinza Contributors
+1. **Credential Manager** → **Install CA**. On macOS, `security` may ask for
+   your login password.
+2. **Fully quit WeChat Desktop** (menu-bar icon too) and reopen it so the
+   `127.0.0.1:8088` proxy and CA apply.
+3. Fill in the Official Account name (must match `name_list.xlsx` later) plus
+   any public article URL → **Add & Capture**.
+4. In WeChat, **re-open** an article from that account (do not only refresh an
+   old tab). If `key` is still missing, scroll the account history page to
+   trigger `getmsg`.
+5. The card should become active with a ~30‑minute countdown. Secrets land in
+   `data/accounts.json` — never commit or share that file.
+
+If `data/capture_debug.log` is empty, WeChat is not using the proxy: quit
+WeChat again. If the log says credentials are incomplete, scroll history.
+After you quit Schinza, turn off a leftover manual proxy at `127.0.0.1:8088`
+if the browser has no network.
 
 ---
 
-## Disclaimer
+## List first, bodies later
 
-Schinza is provided **solely as open-source software** for learning, research, and legitimate self-hosted use.
+On **History Articles**, pick the account (default: all history) and click
+**拉取列表并归档**.
 
-- By downloading, copying, modifying, or running this project, **you accept full responsibility** for your actions and consequences.
-- Authors and contributors are **not liable** for loss, account bans, legal disputes, data leaks, or other damage from use or misuse.
-- **Dangerous, abusive, illegal, or ToS-violating behavior by third parties has nothing to do with the authors.**
-- Schinza is **not** affiliated with Tencent or WeChat.
+- Listing uses the 30‑minute window and writes `data/history_cache.sqlite`.
+  Paging stops ~90 seconds before expiry.
+- Bodies start **only after the list is complete**. Public HTML is fetched
+  **without** expired cookies, one request at a time, 8–15 s apart.
+- If the window ends with an incomplete list, bodies are **not** started, so
+  you can renew immediately and keep paging.
+- After expiry, **继续归档正文** downloads cached URLs. Already-written files
+  in `data/archives/<account>/` are skipped.
 
-**If you do not agree, do not use this software.**
+HTTP 429, `unknownerror`, or “too frequent” pages **stop the job**. Wait hours
+to a day. Do not raise concurrency.
+
+Renew: Credential Manager → **Renew** → restart WeChat if needed → re-open the
+article or scroll history → same account on the History tab → click again.
+Paging resumes from the cached offset.
+
+Archive layout (no short-lived secrets):
+
+```text
+data/archives/<account>/
+├── manifest.json / manifest.jsonl
+├── articles/
+├── archive_index.sqlite
+├── job_state.jsonl
+├── failures.jsonl
+└── summary.json
+```
 
 ---
 
-<p align="center">
-  <a href="https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate/releases"><b>Download</b></a>
-  ·
-  <a href="./README.md"><b>English</b></a>
-  ·
-  <a href="./README.zh-CN.md">中文</a>
-</p>
+## Merge into SQLite
+
+```bash
+cd "$HOME/Desktop/wechat-work/wechat_crawler"
+source .venv/bin/activate
+python run.py import-list
+python run.py import-schinza-export \
+  --manifest "../schinza-wechat-certificate-main/data/archives/<account>/manifest.json" \
+  --articles-dir "../schinza-wechat-certificate-main/data/archives/<account>/articles"
+python run.py status
+```
+
+See the [crawler README](https://github.com/MichaelMu151/wechat_crawler/blob/cursor/wechat-archive-enhancements/README.md).
+
+---
+
+## Troubleshooting
+
+| Symptom | What to do |
+|---------|------------|
+| `No module named '_tkinter'` | Use `.venv-intel` / python.org 3.14 on Intel Mac |
+| UI looks like the old app | You launched `Schinza.app`, not `python main.py` on `scalable-archive` |
+| `unknownerror` | Server-side rate limit; wait; do not hammer “all history” |
+| Renew does nothing | Restart WeChat; re-open article or scroll history; read `capture_debug.log` |
+| Credentials expired | Bodies can continue; listing needs a renew |
+
+---
+
+## Security
+
+Use only on accounts you may archive. Do not publish CA private keys or live
+`uin` / `key` / `pass_ticket`. History fetches set `trust_env=False` so the
+capture proxy does not intercept body downloads. The Sync Server tab has **no**
+built-in URL.
+
+```bash
+.venv-intel/bin/python -m pytest tests -q
+```
+
+Do not commit `data/`, `.venv*`, `dist/`, or CA private keys.
+
+---
+
+## Optional packaging
+
+Daily use is source. Scripts: `build.ps1`, `build_mac.sh`, `build_mac_x64.sh`
+(Intel, Rosetta 2). Capture-capable builds need a private CA — never commit it.
+Upstream Releases are **not** this fork.
+
+---
+
+## License and disclaimer
+
+[MIT License](LICENSE). Provided for learning, research, and legitimate
+self-hosted use. You accept the consequences. Authors are not liable for bans,
+leaks, or third-party misuse. Not affiliated with Tencent or WeChat.
