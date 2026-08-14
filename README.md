@@ -99,10 +99,13 @@ Sidebar navigation (dark slate + green accent):
 
 ## Quick start (from source)
 
+The full-history and background-archive changes live on this fork's
+`scalable-archive` branch. The upstream `main` branch does not include them.
+
 **Windows:**
 
 ```powershell
-git clone https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate.git
+git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
 cd schinza-wechat-certificate
 
 python -m venv .venv
@@ -118,7 +121,7 @@ python main.py
 **macOS:**
 
 ```bash
-git clone https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate.git
+git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
 cd schinza-wechat-certificate
 
 python3 -m venv .venv-mac
@@ -131,6 +134,18 @@ python3 -m venv .venv-mac
 ```
 
 > On macOS, the first **Install CA** uses the `security` command and may prompt for your login password; system proxy setup/restore uses `networksetup` (the active network service is detected automatically).
+
+### Confirm the scalable version
+
+The source entry point remains `main.py`. In the **History** page, confirm
+**后台归档全部**, the 200-item preview notice, or the generated
+`data/history_cache.sqlite`. Archive folders contain `archive_index.sqlite` and
+`manifest.jsonl`. To check the source version:
+
+```bash
+.venv-mac/bin/python -c "from app import __version__; print(__version__)"
+# 1.9.0
+```
 
 ### First-time capture flow
 

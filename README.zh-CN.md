@@ -98,10 +98,13 @@
 
 ## 快速开始（源码）
 
+本仓库的“全历史续拉 / 后台归档全部”改版位于 `scalable-archive` 分支。
+请使用下面的 fork 地址和分支；原作者仓库的 `main` 不包含这些功能。
+
 **Windows：**
 
 ```powershell
-git clone https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate.git
+git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
 cd schinza-wechat-certificate
 
 python -m venv .venv
@@ -117,7 +120,7 @@ python main.py
 **macOS：**
 
 ```bash
-git clone https://github.com/Alexxxxxxxxxxxxy/schinza-wechat-certificate.git
+git clone --branch scalable-archive https://github.com/MichaelMu151/schinza-wechat-certificate.git
 cd schinza-wechat-certificate
 
 python3 -m venv .venv-mac
@@ -130,6 +133,28 @@ python3 -m venv .venv-mac
 ```
 
 > macOS 上首次「安装 CA 证书」会调用 `security` 命令，可能弹出系统密码框（输入本机密码即可）；代理设置与恢复使用 `networksetup`（自动识别当前网络服务）。
+
+### 如何确认启动的是改版
+
+源码启动入口仍是 `main.py`，不是另一个应用：
+
+```bash
+.venv-mac/bin/python main.py
+```
+
+启动后在“历史文章”页确认以下任一标识：
+
+- 有 **后台归档全部** 按钮；
+- 历史文章超过 200 篇时，界面提示只预览前 200 篇；
+- 拉取过历史后，`data/history_cache.sqlite` 出现；
+- 归档目录中出现 `archive_index.sqlite` 与 `manifest.jsonl`。
+
+也可在终端确认源码版本：
+
+```bash
+.venv-mac/bin/python -c "from app import __version__; print(__version__)"
+# 改版当前显示 1.9.0
+```
 
 ### 首次抓包流程
 
