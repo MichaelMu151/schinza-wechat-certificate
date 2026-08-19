@@ -83,6 +83,9 @@ TRUE_JS = "true"
 
 WECHAT_PROCESS_NAMES = ("微信", "WeChat", "Weixin")
 
+# Measured by the operator with Safari in fullscreen: the 「前往」 button.
+GO_BUTTON_POINT = (958, 640)
+
 
 def _as_literal(text: str) -> str:
     return json.dumps(text, ensure_ascii=False)
@@ -214,6 +217,135 @@ def is_wechat_app(name: str) -> bool:
         return False
     lowered = text.lower()
     return text in WECHAT_PROCESS_NAMES or "wechat" in lowered or "weixin" in lowered or "微信" in text
+
+
+def ensure_safari_fullscreen(*, run: RunFn | None = None) -> str:
+    """GO_BUTTON_POINT was measured in fullscreen; keep Safari in that layout."""
+
+    source = """
+tell application "Safari" to activate
+delay 0.2
+tell application "System Events"
+  if not (exists process "Safari") then return "no-safari"
+  tell process "Safari"
+    set frontmost to true
+    delay 0.1
+    try
+      if (count of windows) is 0 then return "no-window"
+      set fs to false
+      try
+        set fs to value of attribute "AXFullScreen" of window 1
+      end try
+      if fs is true then return "already-fullscreen"
+      try
+        set value of attribute "AXFullScreen" of window 1 to true
+        delay 0.8
+        return "entered-fullscreen"
+      end try
+    end try
+  end tell
+end tell
+return "fullscreen-unknown"
+"""
+    try:
+        return _run_osascript(source, timeout=12, run=run)
+    except Exception as exc:  # noqa: BLE001
+        return f"fullscreen-error:{exc}"
+
+
+def _main_display_height_points(*, run: RunFn | None = None) -> int:
+    source = (
+        'use framework "AppKit"\n'
+        "use scripting additions\n"
+        "set h to (current application's NSScreen's mainScreen's "
+        "frame()'s |size|'s height) as number\n"
+        "return h as integer\n"
+    )
+    try:
+        return int(float(_run_osascript(source, timeout=8, run=run)))
+    except Exception:
+        return 1080
+
+
+def _quartz_click(x: float, y: float) -> None:
+    """Post a left click. Quartz uses a bottom-left origin."""
+
+    import ctypes
+    import ctypes.util
+
+    cg_path = ctypes.util.find_library("CoreGraphics") or (
+        "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+    )
+    cf_path = ctypes.util.find_library("CoreFoundation") or (
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+    )
+    cg = ctypes.cdll.LoadLibrary(cg_path)
+    cf = ctypes.cdll.LoadLibrary(cf_path)
+
+    class CGPoint(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+    k_cg_event_left_mouse_down = 1
+    k_cg_event_left_mouse_up = 2
+    k_cg_hid_event_tap = 0
+    k_cg_mouse_button_left = 0
+
+    create = cg.CGEventCreateMouseEvent
+    create.restype = ctypes.c_void_p
+    create.argtypes = [ctypes.c_void_p, ctypes.c_uint32, CGPoint, ctypes.c_uint32]
+    post = cg.CGEventPost
+    post.argtypes = [ctypes.c_uint32, ctypes.c_void_p]
+    release = cf.CFRelease
+    release.argtypes = [ctypes.c_void_p]
+
+    point = CGPoint(x, y)
+    down = create(None, k_cg_event_left_mouse_down, point, k_cg_mouse_button_left)
+    up = create(None, k_cg_event_left_mouse_up, point, k_cg_mouse_button_left)
+    if down:
+        post(k_cg_hid_event_tap, down)
+    if up:
+        post(k_cg_hid_event_tap, up)
+    if down:
+        release(down)
+    if up:
+        release(up)
+
+
+def click_screen_point(
+    x: int,
+    y: int,
+    *,
+    run: RunFn | None = None,
+) -> str:
+    """Click a top-left screen point. 958,640 is 「前往」 in fullscreen Safari."""
+
+    if run is None:
+        try:
+            height = _main_display_height_points()
+            _quartz_click(float(x), float(height - y))
+        except Exception:
+            pass
+    source = (
+        "tell application \"Safari\" to activate\n"
+        "delay 0.05\n"
+        "tell application \"System Events\"\n"
+        "  tell process \"Safari\"\n"
+        "    set frontmost to true\n"
+        "  end tell\n"
+        "  delay 0.05\n"
+        f"  click at {{{int(x)}, {int(y)}}}\n"
+        "end tell\n"
+        f'return "xy:{int(x)},{int(y)}"\n'
+    )
+    try:
+        out = _run_osascript(source, timeout=8, run=run)
+        if str(out).startswith("xy:"):
+            return out
+        return f"xy:{int(x)},{int(y)}"
+    except Exception as exc:  # noqa: BLE001
+        if run is None:
+            return f"xy:{int(x)},{int(y)}:quartz-only:{exc}"
+        return f"xy-error:{exc}"
 
 
 def safari_has_sheet(*, run: RunFn | None = None) -> bool:
@@ -441,7 +573,8 @@ def handoff_article_to_wechat(
     open_in_safari(url, run=run)
     sleep(1.0)
     ready = wait_safari_article(run=run)
-    sleep(0.8)
+    fullscreen = ensure_safari_fullscreen(run=run)
+    sleep(0.6)
     name_hit = "name-not-found"
     for _ in range(8):
         name_hit = safari_do_javascript(CLICK_NAME_JS, run=run)
@@ -457,40 +590,43 @@ def handoff_article_to_wechat(
     go_js = "go-not-found"
     ax = "skipped"
     key_hit = "skipped"
+    xy = "skipped"
     sheet = False
     handed_off = False
+    go_x, go_y = GO_BUTTON_POINT
 
-    # Name click often opens a Safari *system* sheet. JS cannot press that.
-    # Handle the sheet first; only search the DOM when no sheet is up.
-    for _ in range(16):
-        sleep(0.35)
-        sheet = safari_has_sheet(run=run)
-        if sheet:
-            ax = click_system_go_button(run=run)
-            if not _ax_clicked(ax):
-                key_hit = press_safari_confirm_key(run=run)
-        else:
-            try:
-                go_js = safari_do_javascript(CLICK_GO_JS, run=run)
-            except Exception as exc:  # noqa: BLE001
-                go_js = f"js-error:{exc}"
-            ax = click_system_go_button(run=run)
-        wechat_now = is_wechat_app(frontmost_app_name(run=run))
-        if wechat_now and not wechat_before:
-            handed_off = True
-            break
-        if _ax_clicked(ax) or key_hit.startswith("return-sheet"):
-            handed_off = True
-            break
-        if str(go_js).startswith("clicked") and not safari_has_sheet(run=run):
-            handed_off = True
-            break
+    # 「前往」 is a Safari system dialog at 958,640 in fullscreen.
+    sleep(0.6)
+    xy = click_screen_point(go_x, go_y, run=run)
+    sleep(0.45)
+    xy = click_screen_point(go_x, go_y, run=run)
+    sheet = safari_has_sheet(run=run)
+    if sheet:
+        ax = click_system_go_button(run=run)
+        if not _ax_clicked(ax):
+            key_hit = press_safari_confirm_key(run=run)
+    else:
+        try:
+            go_js = safari_do_javascript(CLICK_GO_JS, run=run)
+        except Exception as exc:  # noqa: BLE001
+            go_js = f"js-error:{exc}"
+        ax = click_system_go_button(run=run)
+    wechat_now = is_wechat_app(frontmost_app_name(run=run))
+    if wechat_now and not wechat_before:
+        handed_off = True
+    if _ax_clicked(ax) or key_hit.startswith("return-sheet"):
+        handed_off = True
+    if str(xy).startswith("xy:") and not str(xy).startswith("xy-error"):
+        handed_off = True
+    if str(go_js).startswith("clicked") and not safari_has_sheet(run=run):
+        handed_off = True
 
     if not handed_off:
         dump = dump_safari_buttons(run=run)
         raise RuntimeError(
             f"已点击公众号名称，但没有点到「前往」"
-            f"（js={go_js}, ax={ax}, key={key_hit}, sheet={sheet}, buttons={dump}）。"
+            f"（js={go_js}, ax={ax}, key={key_hit}, xy={xy}, sheet={sheet},"
+            f" fullscreen={fullscreen}, buttons={dump}）。"
             + accessibility_hint()
         )
     return {
@@ -499,4 +635,6 @@ def handoff_article_to_wechat(
         "go_js": go_js,
         "go_ax": ax,
         "go_key": key_hit,
+        "go_xy": xy,
+        "fullscreen": fullscreen,
     }

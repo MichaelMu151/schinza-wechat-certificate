@@ -1,5 +1,6 @@
 from app.safari_handoff import (
     CLICK_NAME_JS,
+    GO_BUTTON_POINT,
     _as_literal,
     handoff_article_to_wechat,
     probe_macos_automation,
@@ -19,12 +20,12 @@ def test_as_literal_quotes_javascript() -> None:
     assert "js_name" in text
 
 
-def test_handoff_clicks_name_then_go(monkeypatch) -> None:
-    calls: list[list[str]] = []
+def test_handoff_clicks_fullscreen_go_coordinates(monkeypatch) -> None:
+    inputs: list[str] = []
 
     def run(cmd, **kwargs):
-        calls.append(cmd)
         stdin = kwargs.get("input") or ""
+        inputs.append(stdin)
         if cmd[:2] == ["open", "-a"]:
             return FakeProc()
         if cmd[:1] == ["osascript"]:
@@ -40,6 +41,8 @@ def test_handoff_clicks_name_then_go(monkeypatch) -> None:
                 return FakeProc(stdout="Safari")
             if 'return "has-sheet"' in stdin:
                 return FakeProc(stdout="no-sheet")
+            if "958" in stdin and "640" in stdin:
+                return FakeProc(stdout="xy:958,640")
             return FakeProc(stdout="ok")
         raise AssertionError(cmd)
 
@@ -49,11 +52,10 @@ def test_handoff_clicks_name_then_go(monkeypatch) -> None:
         run=run,
         sleep=lambda _s: None,
     )
+    assert GO_BUTTON_POINT == (958, 640)
     assert result["name"] == "clicked-js_name"
-    assert result["go_js"] == "clicked-go"
-    assert "has-name" in result["ready"]
-    assert any(c[:3] == ["open", "-a", "Safari"] for c in calls)
-    assert any(c[:1] == ["osascript"] for c in calls)
+    assert result["go_xy"] == "xy:958,640"
+    assert any("click at {958, 640}" in text for text in inputs)
 
 
 def test_handoff_clicks_safari_system_sheet(monkeypatch) -> None:
@@ -68,14 +70,14 @@ def test_handoff_clicks_safari_system_sheet(monkeypatch) -> None:
                 )
             if "clicked-js_name" in stdin:
                 return FakeProc(stdout="clicked-js_name")
-            if "do JavaScript" in stdin and "前往" in stdin:
-                raise AssertionError("system sheet should not rely on page JS")
             if "whose frontmost" in stdin:
                 return FakeProc(stdout="Safari")
             if 'return "has-sheet"' in stdin:
                 return FakeProc(stdout="has-sheet")
             if "click button 2" in stdin:
                 return FakeProc(stdout="ax-sheet-btn2:Safari")
+            if "958" in stdin and "640" in stdin:
+                return FakeProc(stdout="xy:958,640")
             return FakeProc(stdout="ok")
         raise AssertionError(cmd)
 
@@ -86,6 +88,7 @@ def test_handoff_clicks_safari_system_sheet(monkeypatch) -> None:
         sleep=lambda _s: None,
     )
     assert result["name"] == "clicked-js_name"
+    assert result["go_xy"] == "xy:958,640"
     assert result["go_ax"].startswith("ax-sheet-btn2")
 
 

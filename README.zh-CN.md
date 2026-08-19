@@ -14,7 +14,7 @@
 </p>
 
 > 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
-> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.5**）。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.6**）。  
 > 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
@@ -89,7 +89,7 @@ git pull
 ```bash
 # Intel Mac
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 应显示 1.9.5
+# 应显示 1.9.6
 ```
 
 Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
@@ -143,7 +143,7 @@ python main.py
 
 ---
 
-## 操作指南（Intel Mac，版本 1.9.5）
+## 操作指南（Intel Mac，版本 1.9.6）
 
 环境已经装好、公众号已经批量导入之后，日常只做下面几步。
 
@@ -159,7 +159,7 @@ python main.py
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git pull
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.5
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.6
 .venv-intel/bin/python main.py
 ```
 
@@ -249,14 +249,14 @@ git pull
 2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
 3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
 
-### 无人值守拉列表（macOS，1.9.5）
+### 无人值守拉列表（macOS，1.9.6）
 
 细节与权限见上文 **操作指南**。补充行为说明：
 
 - 队列顺序：**仍有效且列表未完成的号优先**（不再开 Safari），然后才是「等待凭证」且带文章链接的号。
 - 开始前会探测辅助功能与 Safari 自动化；失败会在历史页直接提示，而不是第一个号默默失败。
 - Safari 用**新标签**打开文章，等到 `#js_name` 出现才点击，避免点到别的链接。
-- 「前往」通常是 Safari **系统弹窗**（不是网页里的按钮）。程序会点弹窗右侧确认键，必要时再按回车。必须打开「辅助功能」，否则只能点到蓝字、弹窗会停在那里。
+- 「前往」是 Safari **系统弹窗**。实测全屏时按钮在屏幕坐标 **(958, 640)**。程序会先让 Safari 进入全屏，再在该坐标点击两次，并辅以辅助功能点击 / 回车。请保持主屏全屏使用。
 - 点完「前往」后会再等几秒，给微信打开页面、MITM 入库的时间。
 - 号与号之间约 6 秒，且可被「停止队列」打断。
 - 100 页以上的号若 30 分钟没拉完，会留下断点并换下一个；以后续约接着翻。
@@ -323,7 +323,7 @@ python run.py status
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git branch --show-current    # 应为 scalable-archive
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.5
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.6
 .venv-intel/bin/python main.py
 ```
 
