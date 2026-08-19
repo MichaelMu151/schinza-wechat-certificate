@@ -46,16 +46,40 @@ def select_awaiting_accounts(
     days: int | None,
     date_range: tuple[str, str] | None,
 ) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+    return [
+        item["row"]
+        for item in select_unattended_queue(rows, cache, days=days, date_range=date_range)
+        if item["need_handoff"]
+    ]
+
+
+def select_unattended_queue(
+    rows: list[dict[str, Any]],
+    cache: HistoryCache,
+    *,
+    days: int | None,
+    date_range: tuple[str, str] | None,
+) -> list[dict[str, Any]]:
+    """Active accounts with leftover credential time are listed first (no Safari).
+
+    Awaiting accounts still need the Safari → 前往 → WeChat capture step.
+    Already-complete lists are skipped.  Cards are never deleted.
+    """
+
+    active_items: list[dict[str, Any]] = []
+    awaiting_items: list[dict[str, Any]] = []
     for row in rows:
-        if str(row.get("status") or "") != "awaiting":
-            continue
         aid = str(row.get("id") or "")
         if not aid:
             continue
         if listing_already_complete(cache, aid, days=days, date_range=date_range):
             continue
-        if not str(row.get("article_url") or "").strip():
-            continue
-        out.append(row)
-    return out
+        status = str(row.get("status") or "")
+        url = str(row.get("article_url") or "").strip()
+        if status == "active":
+            active_items.append({"row": row, "need_handoff": False})
+        elif status == "awaiting":
+            if not url:
+                continue
+            awaiting_items.append({"row": row, "need_handoff": True})
+    return active_items + awaiting_items

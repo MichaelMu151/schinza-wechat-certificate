@@ -30,11 +30,11 @@ from app.article_reader import (
     format_key_for_article_label,
 )
 from app.history_pipeline import run_list_and_archive
-from app.safari_handoff import accessibility_hint, handoff_article_to_wechat
+from app.safari_handoff import accessibility_hint, handoff_article_to_wechat, probe_macos_automation
 from app.unattended_queue import (
     is_rate_limit_listing_error,
     listing_already_complete,
-    select_awaiting_accounts,
+    select_unattended_queue,
 )
 from app.ca_setup import (
     PROXY_HOST,
@@ -793,7 +793,7 @@ class CertificateApp(ctk.CTk):
 
         ctk.CTkLabel(
             panel,
-            text="凭证约 30 分钟只用于拉列表。点「无人值守拉列表」会依次处理所有「等待凭证」的号：Safari 打开文章 → 点蓝字公众号名 → 前往微信 → 只拉列表，完成后换下一个，不删号、不下正文。",
+            text="凭证约 30 分钟只用于拉列表。点「无人值守拉列表」会先翻页仍有效的号，再处理「等待凭证」的号：Safari 打开文章 → 点蓝字公众号名 → 前往微信 → 只拉列表。完成后换下一个，不删号、不下正文。",
             font=ctk.CTkFont(family=UI_FONT, size=12),
             text_color=COLORS["muted"],
             anchor="w",
@@ -2507,15 +2507,19 @@ class CertificateApp(ctk.CTk):
         if sys.platform != "darwin":
             self.set_hist_status("无人值守拉列表目前只支持 macOS + Safari + 微信桌面。", ok=False)
             return
-        rows = select_awaiting_accounts(
+        issues = probe_macos_automation()
+        if issues:
+            self.set_hist_status("无法开始：" + "；".join(issues) + "。" + accessibility_hint(), ok=False)
+            return
+        queue_items = select_unattended_queue(
             self.store.list_accounts(),
             self.history_cache,
             days=self._history_days,
             date_range=self._history_range_iso,
         )
-        if not rows:
+        if not queue_items:
             self.set_hist_status(
-                "没有「等待凭证」且尚未拉完列表的公众号。请先在凭证管理添加/续约。",
+                "没有待拉列表的公众号。请先在凭证管理把号设为「等待凭证」（或确认已有有效凭证且列表未完成）。",
                 ok=False,
             )
             return
@@ -2529,11 +2533,11 @@ class CertificateApp(ctk.CTk):
         self.hist_unattended_btn.configure(text="停止队列", state="normal")
         self._show_tab("history")
         self.set_hist_status(
-            f"无人值守：{len(rows)} 个等待凭证的号将依次只拉列表。"
+            f"无人值守：{len(queue_items)} 个号将依次只拉列表。"
             + accessibility_hint(),
             ok=True,
         )
-        self._append_hist_log(f"无人值守开始，共 {len(rows)} 个号（不下正文、不删除）")
+        self._append_hist_log(f"无人值守开始，共 {len(queue_items)} 个号（不下正文、不删除）")
         try:
             self._caffeinate_proc = subprocess.Popen(["caffeinate", "-dim"])
         except Exception:
@@ -2546,7 +2550,6 @@ class CertificateApp(ctk.CTk):
             start_ts = _iso_date_to_ts(date_range[0])
             end_ts = _iso_date_to_ts(date_range[1], end_of_day=True)
         fmt_key = self._resolve_article_fmt(self.article_fmt_menu.get())
-        queue_rows = list(rows)
 
         def emit_status(text: str, ok: bool | None = True) -> None:
             self.after(0, lambda t=text, o=ok: self.set_hist_status(t, ok=o))
@@ -2562,18 +2565,27 @@ class CertificateApp(ctk.CTk):
                 time.sleep(1.0)
             return self.store.is_active(account_id)
 
+        def pause(seconds: float) -> None:
+            end = time.time() + seconds
+            while time.time() < end:
+                if self._history_cancel:
+                    return
+                time.sleep(0.4)
+
         def worker() -> None:
             done = skipped = failed = 0
             stop_reason = ""
             try:
-                for index, row in enumerate(queue_rows, start=1):
+                for index, item in enumerate(queue_items, start=1):
                     if self._history_cancel:
                         stop_reason = "已停止"
                         break
+                    row = item["row"]
+                    need_handoff = bool(item.get("need_handoff"))
                     account_id = str(row["id"])
                     name = str(row.get("name") or "未命名")
                     url = str(row.get("article_url") or "").strip()
-                    emit_status(f"[{index}/{len(queue_rows)}] 开始「{name}」：打开 Safari 文章")
+                    emit_status(f"[{index}/{len(queue_items)}] 开始「{name}」")
                     if listing_already_complete(
                         self.history_cache,
                         account_id,
@@ -2583,23 +2595,30 @@ class CertificateApp(ctk.CTk):
                         skipped += 1
                         emit_status(f"「{name}」列表已在缓存中，跳过")
                         continue
-                    self._pending_capture_id = account_id
-                    self.store.set_awaiting(account_id)
-                    self.watcher.enable()
-                    self.mitm.reset_capture_state()
-                    try:
-                        handoff_article_to_wechat(url)
-                    except Exception as exc:  # noqa: BLE001
-                        failed += 1
-                        emit_status(f"「{name}」Safari/前往失败：{exc}", ok=False)
-                        continue
-                    emit_status(f"「{name}」已点前往，等待凭证入库…")
-                    if not wait_active(account_id):
-                        failed += 1
-                        emit_status(
-                            f"「{name}」等待凭证超时。请确认微信已打开该号且代理未关。",
-                            ok=False,
-                        )
+                    if need_handoff:
+                        self._pending_capture_id = account_id
+                        self.store.set_awaiting(account_id)
+                        self.watcher.enable()
+                        self.mitm.reset_capture_state()
+                        emit_status(f"「{name}」：Safari 打开文章并点蓝字 / 前往")
+                        try:
+                            handoff_article_to_wechat(url)
+                        except Exception as exc:  # noqa: BLE001
+                            failed += 1
+                            emit_status(f"「{name}」Safari/前往失败：{exc}", ok=False)
+                            continue
+                        emit_status(f"「{name}」已点前往，等待微信打开并入库凭证…")
+                        pause(3.0)
+                        if not wait_active(account_id):
+                            failed += 1
+                            emit_status(
+                                f"「{name}」等待凭证超时。请确认微信已打开该号、代理未关、CA 已被信任。",
+                                ok=False,
+                            )
+                            continue
+                    elif not self.store.is_active(account_id):
+                        skipped += 1
+                        emit_status(f"「{name}」凭证已失效，跳过（请改成等待凭证后重跑队列）")
                         continue
                     fresh = self.store.get(account_id) or row
                     cred = dict(fresh.get("credentials") or {})
@@ -2666,7 +2685,7 @@ class CertificateApp(ctk.CTk):
                     emit_status(
                         f"「{name}」{flag}：列表 {articles} 篇 · {pages} 页。不删号，换下一个。"
                     )
-                    time.sleep(6.0)
+                    pause(6.0)
             except Exception as exc:  # noqa: BLE001
                 stop_reason = str(exc)
                 emit_status(f"无人值守异常：{exc}", ok=False)

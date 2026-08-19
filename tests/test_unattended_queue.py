@@ -3,6 +3,7 @@ from app.unattended_queue import (
     is_rate_limit_listing_error,
     listing_already_complete,
     select_awaiting_accounts,
+    select_unattended_queue,
 )
 
 
@@ -27,6 +28,30 @@ def test_select_awaiting_skips_complete_and_missing_url(tmp_path) -> None:
     picked = select_awaiting_accounts(rows, cache, days=None, date_range=None)
     assert [r["id"] for r in picked] == ["wait"]
     assert listing_already_complete(cache, "done", days=None, date_range=None) is True
+
+
+def test_select_unattended_queue_active_first(tmp_path) -> None:
+    cache = HistoryCache(tmp_path / "h.sqlite")
+    cache.save_batch(
+        make_query_key("done", days=None, date_range=None),
+        account_id="done",
+        account_name="已完成",
+        days=None,
+        date_range=None,
+        articles=[{"identity": "a", "title": "t", "link": "https://mp.weixin.qq.com/s/a"}],
+        next_offset=0,
+        complete=True,
+    )
+    rows = [
+        {"id": "wait", "status": "awaiting", "article_url": "https://mp.weixin.qq.com/s/b"},
+        {"id": "done", "status": "active", "article_url": "https://mp.weixin.qq.com/s/a"},
+        {"id": "live", "status": "active", "article_url": "https://mp.weixin.qq.com/s/c"},
+        {"id": "nourl", "status": "awaiting", "article_url": ""},
+    ]
+    queue = select_unattended_queue(rows, cache, days=None, date_range=None)
+    assert [item["row"]["id"] for item in queue] == ["live", "wait"]
+    assert queue[0]["need_handoff"] is False
+    assert queue[1]["need_handoff"] is True
 
 
 def test_rate_limit_error_detection() -> None:

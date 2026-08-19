@@ -14,7 +14,7 @@
 </p>
 
 > 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
-> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.3**）。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.4**）。  
 > 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
@@ -89,7 +89,7 @@ git pull
 ```bash
 # Intel Mac
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 应显示 1.9.3
+# 应显示 1.9.4
 ```
 
 Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
@@ -140,6 +140,45 @@ python main.py
 
 启动后左侧应能看到三个页签：**凭证管理**、**历史文章**、**同步服务器**。  
 「历史文章」页主按钮在凭证有效时应为 **拉取列表并归档**，过期后变为 **继续归档正文**；没有文章卡片、全选或勾选框。
+
+---
+
+## 操作指南（Intel Mac，版本 1.9.4）
+
+环境已经装好、公众号已经批量导入之后，日常只做下面几步。
+
+### A. 每次开跑前
+
+1. Mac **不合盖、不锁屏**，接上电源更好。程序会调用 `caffeinate -dim` 防止空闲休眠，但合盖仍可能睡。
+2. **微信桌面已登录**，不要只开手机微信。
+3. 第一次用无人值守时，打开权限（之后不用再改）：
+   - 系统设置 → 隐私与安全性 → **辅助功能**：勾选 Terminal，以及 python.org 的 Python（`/usr/local/bin/python3.14` 或 `.venv-intel` 实际用的那个解释器）。
+   - Safari → 设置 → 高级 → 勾选「显示开发者功能」；菜单「开发」→ 勾选 **允许来自 Apple 事件的 JavaScript**。
+4. 启动（只用这一条，不要用 Homebrew Python）：
+
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+git pull
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.4
+.venv-intel/bin/python main.py
+```
+
+### B. 无人值守只拉列表
+
+1. **凭证管理**：把要处理的号都设成 **等待凭证**（可用「一键续约全部」）。已经在倒计时、列表还没拉完的号也会自动排进队列，不必再点 Safari。
+2. **历史文章** → 时间范围选 **全部历史**（除非你只要近几天）→ **无人值守拉列表**。
+3. 对每个「等待凭证」的号，程序会：用 Safari **新建标签**打开文章 → 等蓝字公众号名 `#js_name` 出现 → **只点这个蓝字** → 反复尝试点弹窗里的「前往」→ 等微信打开并入库凭证 → **只翻页拉列表** → 间隔约 6 秒换下一个。
+4. **不要删号。** 卡片留着才能续拉列表、夜里下正文、再导入 SQLite。
+5. **不要合盖。** 出现 `unknownerror` / 429 /「频繁」时整队停止，等数小时到一天，不要连点重试。
+6. 想停就点 **停止队列**。已写入 `data/history_cache.sqlite` 的页会保留。
+
+### C. 列表拉完之后
+
+正文不跟列表抢那 30 分钟。夜里或凭证过期后，在历史文章里对该号点 **继续归档正文**（单请求、每篇 8–15 秒）。不要提高并发。
+
+### D. 再写入原来的 SQLite
+
+见第 7 节。公众号名称必须与卡片名、`name_list.xlsx` 完全一致。真实归档目录在 `data/archives/` 下，以卡片名为文件夹，例如 `data/archives/曲靖市妇幼保健院/`，不是文档里的占位符「公众号名称」。
 
 ---
 
@@ -210,21 +249,18 @@ python main.py
 2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
 3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
 
-### 无人值守拉列表（macOS，1.9.3）
+### 无人值守拉列表（macOS，1.9.4）
 
-适合你不在电脑前、但微信已登录、Mac **不合盖不锁屏** 的时候。它**不会**点「删除」，也**不会**下正文。
+细节与权限见上文 **操作指南**。补充行为说明：
 
-1. 凭证管理里把要处理的号都变成 **等待凭证**（批量导入或一键续约全部）。
-2. 首次使用请打开权限：
-   - 系统设置 → 隐私与安全性 → **辅助功能**：勾选 Terminal 或你用来启动 `main.py` 的 Python。
-   - Safari → 设置 → 高级 → 显示开发者功能；菜单「开发」→ 勾选 **允许来自 Apple 事件的 JavaScript**。
-3. 确认微信桌面已登录、Schinza 代理已开（点无人值守时会自动开代理）。
-4. 历史文章 → **无人值守拉列表**。
-5. 对每个等待凭证的号，程序会：用 Safari 打开文章 → 点击标题下蓝字公众号名 → 点「前往」→ 等凭证入库 → **只翻页拉列表** → 换下一个。号与号之间间隔约 6 秒。
-6. 列表已在缓存中的号会跳过。100 页以上的号若 30 分钟没拉完，会留下断点，队列继续下一个；以后再续约即可接着翻。
-7. 出现频控时**整队停止**。点「停止队列」可随时停。
-
-结束后公众号卡片都还在。正文请稍后对已缓存的号点 **继续归档正文**（仍是单请求、8–15 秒）。
+- 队列顺序：**仍有效且列表未完成的号优先**（不再开 Safari），然后才是「等待凭证」且带文章链接的号。
+- 开始前会探测辅助功能与 Safari 自动化；失败会在历史页直接提示，而不是第一个号默默失败。
+- Safari 用**新标签**打开文章，等到 `#js_name` 出现才点击，避免点到别的链接。
+- 「前往」先在页面里重试多次，再退回系统辅助功能点击。
+- 点完「前往」后会再等几秒，给微信打开页面、MITM 入库的时间。
+- 号与号之间约 6 秒，且可被「停止队列」打断。
+- 100 页以上的号若 30 分钟没拉完，会留下断点并换下一个；以后续约接着翻。
+- 频控（`unknownerror` / 429 / 频繁）**整队停止**。卡片不删除，正文另做。
 
 ### 正文节奏与风控
 
@@ -287,7 +323,7 @@ python run.py status
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git branch --show-current    # 应为 scalable-archive
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.3
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.4
 .venv-intel/bin/python main.py
 ```
 
@@ -335,6 +371,8 @@ git branch --show-current    # 应为 scalable-archive
 │   ├── history_cache.py    # data/history_cache.sqlite
 │   ├── archive_job.py      # 慢速正文
 │   ├── article_reader.py   # 解析公开文章 HTML
+│   ├── safari_handoff.py   # Safari → 点蓝字 / 前往
+│   ├── unattended_queue.py # 无人值守队列（先有效号，再等待凭证）
 │   └── store.py            # data/accounts.json
 ├── data/                   # 本地数据，勿提交
 └── tests/
