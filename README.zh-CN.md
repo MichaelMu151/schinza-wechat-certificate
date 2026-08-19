@@ -14,7 +14,7 @@
 </p>
 
 > 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
-> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.7**）。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.8**）。  
 > 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
@@ -89,7 +89,7 @@ git pull
 ```bash
 # Intel Mac
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 应显示 1.9.7
+# 应显示 1.9.8
 ```
 
 Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
@@ -143,44 +143,93 @@ python main.py
 
 ---
 
-## 操作指南（Intel Mac，版本 1.9.7）
+## 操作指南（Intel Mac，版本 1.9.8）
 
-环境已经装好、公众号已经批量导入之后，日常只做下面几步。
+环境已经装好、公众号已经批量导入之后，日常按这里做。换显示器或分辨率后，先看本节 **E. 「前往」坐标**。
 
 ### A. 每次开跑前
 
-1. Mac **不合盖、不锁屏**，接上电源更好。程序会调用 `caffeinate -dim` 防止空闲休眠，但合盖仍可能睡。
+1. Mac **不合盖、不锁屏**，接电源更好。程序会调用 `caffeinate -dim` 防空闲休眠，但合盖仍可能睡。
 2. **微信桌面已登录**，不要只开手机微信。
-3. 第一次用无人值守时，打开权限（之后不用再改）：
-   - 系统设置 → 隐私与安全性 → **辅助功能**：勾选 Terminal，以及 python.org 的 Python（`/usr/local/bin/python3.14` 或 `.venv-intel` 实际用的那个解释器）。
-   - Safari → 设置 → 高级 → 勾选「显示开发者功能」；菜单「开发」→ 勾选 **允许来自 Apple 事件的 JavaScript**。
-4. 启动（只用这一条，不要用 Homebrew Python）：
+3. 第一次用无人值守时打开权限（之后不用再改）：
+   - 系统设置 → 隐私与安全性 → **辅助功能**：勾选 Terminal，以及 python.org 的 **Python 3.14**（一般是 `/Library/Frameworks/Python.framework/Versions/3.14/Resources/Python.app`）。勾完后必须完全退出再启动 `main.py`。
+   - Safari → 设置 → 高级 → 「显示开发者功能」；菜单「开发」→ **允许来自 Apple 事件的 JavaScript**。
+4. 只用这一条启动（不要用 Homebrew Python）：
 
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git pull
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.7
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.8
 .venv-intel/bin/python main.py
 ```
 
 ### B. 无人值守归档（一个号做完再换下一个）
 
-1. **凭证管理**：把要处理的号都设成 **等待凭证**（可用「一键续约全部」）。已经在倒计时、列表还没拉完的号也会自动排进队列。
-2. **历史文章** → 时间范围选 **全部历史**（除非你只要近几天）→ **无人值守归档**。
-3. 对每个号，程序会：Safari 打开文章 → 点蓝字 → 点「前往」→ **只翻页拉列表**。若 30 分钟窗口不够，**不换号**，重新捕获后再接着翻。列表拉完后，立刻对该号慢速下正文（8–15 秒/篇），正文结束后才换下一个。
-4. **不要删号。** 卡片留着才能续拉、下正文、再导入 SQLite。
-5. **不要合盖。** 出现 `unknownerror` / 429 /「频繁」时整队停止，等数小时到一天，不要连点重试。
-6. 想停就点 **停止队列**。已写入缓存和归档目录的进度会保留。
+历史文章页按钮是 **「无人值守归档」**。
 
-这样做是为了避免连续给很多号翻页、触发微信风控。一个号的正文可能要数小时，这是正常的。
+1. **凭证管理**：把要处理的号都设成 **等待凭证**（可用「一键续约全部」）。已在倒计时、列表未拉完的号也会进队。
+2. **历史文章** → 时间范围选 **全部历史**（除非只要近几天）→ **无人值守归档**。
+3. 对**每一个**公众号，顺序固定为：
+   1. Safari 全屏打开该号文章 → 点标题下蓝字公众号名 → 点系统弹窗 **「前往」**（坐标见 E 节）
+   2. 等微信打开、凭证入库
+   3. **只翻页拉列表**（约 1 秒/页）。30 分钟不够就**还是这个号**再捕获、接着翻，不换号
+   4. 列表拉完后，立刻给这个号下正文（单请求、每篇 8–15 秒）
+   5. 这个号正文结束后，间隔约 15 秒，再处理下一个
+4. **不要删号。** 卡片用来续拉、下正文、导入 SQLite。
+5. **不要合盖。** 出现 `unknownerror` / 429 /「频繁」会整队停止，等数小时到一天，不要连点重试。
+6. 随时可点 **停止队列**。已写入 `data/history_cache.sqlite` 和 `data/archives/公众号名/` 的进度会保留。
+
+一个号的正文可能要数小时，这是正常的。这样安排是为了避免连续给很多号翻页而触发风控。
 
 ### C. 正文节奏
 
-正文仍是单请求、每篇随机等待 **8–15 秒**。无人值守会在该号列表完成后自动开始。也可事后单独点 **继续归档正文**。不要提高并发。
+正文不占用 30 分钟凭证窗口。无人值守会在该号列表完成后自动开始；也可事后单独点 **继续归档正文**。不要提高并发。
 
 ### D. 再写入原来的 SQLite
 
-见第 7 节。公众号名称必须与卡片名、`name_list.xlsx` 完全一致。真实归档目录在 `data/archives/` 下，以卡片名为文件夹，例如 `data/archives/曲靖市妇幼保健院/`，不是文档里的占位符「公众号名称」。
+见第 7 节。公众号名称必须与卡片名、`name_list.xlsx` 完全一致。真实目录例如 `data/archives/曲靖市妇幼保健院/`，不要用文档里的占位符「公众号名称」。
+
+### E. 「前往」点击坐标（换设备 / 换屏幕必读）
+
+点完蓝字后弹出的「即将前往微信打开此文章」是 **Safari 系统弹窗**，不是网页按钮。程序在 **Safari 全屏** 下，按屏幕坐标点击「前往」。
+
+**当前本机全屏实测坐标是 `(958, 640)`。**
+
+坐标系：
+
+- 原点在**主屏左上角**
+- `x` 向右增大，`y` 向下增大
+- 单位是 macOS 的「点」（point），不是 Retina 物理像素
+- **必须全屏**。窗口模式、外接屏分辨率变化、系统显示缩放变化后，这个数字会失效
+
+**改哪里（两种，任选其一）：**
+
+1. **改代码（推荐，改完可提交仓库）**  
+   文件：`app/safari_handoff.py`  
+   常量：`DEFAULT_GO_BUTTON_POINT`  
+   把 `(958, 640)` 改成你新测到的 `(x, y)`，保存后重新启动 `main.py`。
+
+2. **不改代码，用环境变量**（适合临时试坐标）：
+
+```bash
+export SCHINZA_GO_BUTTON=958,640
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+.venv-intel/bin/python main.py
+```
+
+**怎么重新测量：**
+
+1. 让 Safari **全屏**，打开一篇公众号文章，点蓝字，直到「前往」弹窗出现。
+2. 另开一个终端，在仓库根目录执行（5 秒内把鼠标移到「前往」按钮正中）：
+
+```bash
+cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
+.venv-intel/bin/python -m app.safari_handoff --mouse
+```
+
+3. 终端会打印新坐标。按上面第 1 或第 2 种方法写进去，**完全退出 Schinza 再启动**，用一个号试无人值守，确认弹窗被点掉、微信被打开。
+
+换笔记本、换显示器、改系统缩放（例如 1440×900 ↔ 1920×1080）后都要重测。不要在非全屏下使用旧坐标。
 
 ---
 
@@ -251,7 +300,7 @@ git pull
 2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
 3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
 
-### 无人值守归档（macOS，1.9.7）
+### 无人值守归档（macOS，1.9.8）
 
 细节与权限见上文 **操作指南**。补充行为说明：
 
@@ -259,7 +308,7 @@ git pull
 - 对**同一个号**：列表拉完才下正文；窗口不够就重新捕获、继续翻页，**不换号**。正文结束后才进入下一个。
 - 开始前会探测辅助功能与 Safari 自动化；失败会在历史页直接提示。
 - Safari 用**新标签**打开文章，等到 `#js_name` 出现才点击。
-- 「前往」是 Safari **系统弹窗**。实测全屏时按钮在屏幕坐标 **(958, 640)**。程序会先让 Safari 进入全屏，再在该坐标点击两次。
+- 「前往」是 Safari **系统弹窗**，按全屏坐标点击。默认 `(958, 640)`。换屏幕后按上文 **操作指南 E** 重测，改 `app/safari_handoff.py` 的 `DEFAULT_GO_BUTTON_POINT`。
 - 号与号之间约 15 秒。频控（`unknownerror` / 429 / 频繁）**整队停止**。卡片不删除。
 
 ### 正文节奏与风控
@@ -323,7 +372,7 @@ python run.py status
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git branch --show-current    # 应为 scalable-archive
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.7
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.8
 .venv-intel/bin/python main.py
 ```
 

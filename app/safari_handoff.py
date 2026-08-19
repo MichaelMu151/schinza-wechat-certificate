@@ -4,12 +4,14 @@ The article page's blue account name (#js_name, under the title) must be
 clicked; that shows 「即将前往微信打开此文章」.  Then 「前往」 must be clicked.
 
 That confirm UI is usually a **Safari system sheet**, not a DOM button.
-JavaScript cannot press it.  Accessibility + Return are required.
+JavaScript cannot press it.  The working click is a fullscreen screen
+coordinate: see GO_BUTTON_POINT / SCHINZA_GO_BUTTON.
 """
 
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import sys
 import time
@@ -83,8 +85,38 @@ TRUE_JS = "true"
 
 WECHAT_PROCESS_NAMES = ("微信", "WeChat", "Weixin")
 
-# Measured by the operator with Safari in fullscreen: the 「前往」 button.
-GO_BUTTON_POINT = (958, 640)
+# ---------------------------------------------------------------------------
+# 「前往」点击坐标（换显示器 / 分辨率 / 缩放时改这里）
+#
+# 坐标系：主屏左上角为 (0, 0)，向右为 x、向下为 y，单位是「点」不是 Retina 像素。
+# 必须在 Safari **全屏** 且「即将前往微信打开此文章」弹窗可见时测量。
+# 当前默认值 958,640 是本机全屏实测。
+#
+# 改法 1（推荐，改代码）：把下面 DEFAULT_GO_BUTTON_POINT 改成新坐标。
+# 改法 2（不改代码）：启动前设置环境变量
+#   export SCHINZA_GO_BUTTON=958,640
+# 重测：.venv-intel/bin/python -m app.safari_handoff --mouse
+# ---------------------------------------------------------------------------
+DEFAULT_GO_BUTTON_POINT = (958, 640)
+
+
+def parse_go_button_point(raw: str | None = None) -> tuple[int, int]:
+    text = (os.environ.get("SCHINZA_GO_BUTTON", "") if raw is None else raw).strip()
+    if not text:
+        return DEFAULT_GO_BUTTON_POINT
+    parts = text.replace(" ", "").replace(";", ",").split(",")
+    if len(parts) != 2:
+        return DEFAULT_GO_BUTTON_POINT
+    try:
+        x, y = int(parts[0]), int(parts[1])
+    except ValueError:
+        return DEFAULT_GO_BUTTON_POINT
+    if x < 0 or y < 0 or x > 10000 or y > 10000:
+        return DEFAULT_GO_BUTTON_POINT
+    return (x, y)
+
+
+GO_BUTTON_POINT = parse_go_button_point()
 
 
 def _as_literal(text: str) -> str:
@@ -593,9 +625,9 @@ def handoff_article_to_wechat(
     xy = "skipped"
     sheet = False
     handed_off = False
-    go_x, go_y = GO_BUTTON_POINT
+    go_x, go_y = parse_go_button_point()
 
-    # 「前往」 is a Safari system dialog at 958,640 in fullscreen.
+    # 「前往」 is a Safari system dialog; click the fullscreen coordinate.
     sleep(0.6)
     xy = click_screen_point(go_x, go_y, run=run)
     sleep(0.45)
@@ -637,4 +669,64 @@ def handoff_article_to_wechat(
         "go_key": key_hit,
         "go_xy": xy,
         "fullscreen": fullscreen,
+        "go_point": f"{go_x},{go_y}",
     }
+
+
+def read_mouse_point_top_left() -> tuple[int, int]:
+    """Current mouse location as top-left screen points (same as GO_BUTTON_POINT)."""
+
+    import ctypes
+    import ctypes.util
+
+    cg_path = ctypes.util.find_library("CoreGraphics") or (
+        "/System/Library/Frameworks/CoreGraphics.framework/CoreGraphics"
+    )
+    cf_path = ctypes.util.find_library("CoreFoundation") or (
+        "/System/Library/Frameworks/CoreFoundation.framework/CoreFoundation"
+    )
+    cg = ctypes.cdll.LoadLibrary(cg_path)
+    cf = ctypes.cdll.LoadLibrary(cf_path)
+
+    class CGPoint(ctypes.Structure):
+        _fields_ = [("x", ctypes.c_double), ("y", ctypes.c_double)]
+
+    create = cg.CGEventCreate
+    create.restype = ctypes.c_void_p
+    create.argtypes = [ctypes.c_void_p]
+    get_loc = cg.CGEventGetLocation
+    get_loc.restype = CGPoint
+    get_loc.argtypes = [ctypes.c_void_p]
+    release = cf.CFRelease
+    release.argtypes = [ctypes.c_void_p]
+
+    event = create(None)
+    if not event:
+        raise RuntimeError("无法读取鼠标位置")
+    try:
+        pt = get_loc(event)
+    finally:
+        release(event)
+    height = _main_display_height_points()
+    return int(round(pt.x)), int(round(height - pt.y))
+
+
+def _mouse_probe_main() -> None:
+    delay_s = 5.0
+    print(
+        f"{delay_s:.0f} 秒内请把鼠标移到 Safari 全屏弹窗「前往」按钮的中心，不要移动窗口。",
+        flush=True,
+    )
+    time.sleep(delay_s)
+    x, y = read_mouse_point_top_left()
+    print(f"测到坐标：({x}, {y})")
+    print(f"请把 app/safari_handoff.py 里的 DEFAULT_GO_BUTTON_POINT 改为 ({x}, {y})")
+    print(f"或不改代码，启动前执行：export SCHINZA_GO_BUTTON={x},{y}")
+
+
+if __name__ == "__main__":
+    if "--mouse" in sys.argv:
+        _mouse_probe_main()
+    else:
+        print("用法：python -m app.safari_handoff --mouse")
+        raise SystemExit(2)

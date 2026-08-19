@@ -1,8 +1,9 @@
 from app.safari_handoff import (
     CLICK_NAME_JS,
-    GO_BUTTON_POINT,
+    DEFAULT_GO_BUTTON_POINT,
     _as_literal,
     handoff_article_to_wechat,
+    parse_go_button_point,
     probe_macos_automation,
 )
 
@@ -18,6 +19,13 @@ def test_as_literal_quotes_javascript() -> None:
     text = _as_literal(CLICK_NAME_JS)
     assert text.startswith('"')
     assert "js_name" in text
+
+
+def test_parse_go_button_point_defaults_and_env() -> None:
+    assert DEFAULT_GO_BUTTON_POINT == (958, 640)
+    assert parse_go_button_point("") == (958, 640)
+    assert parse_go_button_point("1200, 800") == (1200, 800)
+    assert parse_go_button_point("bad") == (958, 640)
 
 
 def test_handoff_clicks_fullscreen_go_coordinates(monkeypatch) -> None:
@@ -52,9 +60,9 @@ def test_handoff_clicks_fullscreen_go_coordinates(monkeypatch) -> None:
         run=run,
         sleep=lambda _s: None,
     )
-    assert GO_BUTTON_POINT == (958, 640)
     assert result["name"] == "clicked-js_name"
     assert result["go_xy"] == "xy:958,640"
+    assert DEFAULT_GO_BUTTON_POINT == (958, 640)
     assert any("click at {958, 640}" in text for text in inputs)
 
 

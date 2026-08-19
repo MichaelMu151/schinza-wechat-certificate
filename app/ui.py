@@ -2599,6 +2599,7 @@ class CertificateApp(ctk.CTk):
                     out_dir.mkdir(parents=True, exist_ok=True)
                     self._pipeline_out_dir = str(out_dir)
                     account_done = False
+                    account_failed = False
                     for listing_round in range(1, MAX_LISTING_ROUNDS + 1):
                         if self._history_cancel:
                             stop_reason = "已停止"
@@ -2618,6 +2619,7 @@ class CertificateApp(ctk.CTk):
                         if not skip_this_listing and (need_handoff or not cred_ready):
                             if not url:
                                 failed += 1
+                                account_failed = True
                                 emit_status(f"「{name}」没有文章链接，无法捕获，跳过", ok=False)
                                 break
                             self._pending_capture_id = account_id
@@ -2631,12 +2633,14 @@ class CertificateApp(ctk.CTk):
                                 handoff_article_to_wechat(url)
                             except Exception as exc:  # noqa: BLE001
                                 failed += 1
+                                account_failed = True
                                 emit_status(f"「{name}」Safari/前往失败：{exc}", ok=False)
                                 break
                             emit_status(f"「{name}」已点前往，等待微信打开并入库凭证…")
                             pause(3.0)
                             if not wait_active(account_id):
                                 failed += 1
+                                account_failed = True
                                 emit_status(
                                     f"「{name}」等待凭证超时。请确认微信已打开该号、代理未关、CA 已被信任。",
                                     ok=False,
@@ -2650,6 +2654,7 @@ class CertificateApp(ctk.CTk):
                             )
                         elif not skip_this_listing and not cred_ready:
                             skipped += 1
+                            account_failed = True
                             emit_status(f"「{name}」凭证已失效，跳过（请改成等待凭证后重跑队列）")
                             break
                         fresh = self.store.get(account_id) or row
@@ -2660,6 +2665,7 @@ class CertificateApp(ctk.CTk):
                             cred.get("__biz") and cred.get("uin") and cred.get("key")
                         ):
                             failed += 1
+                            account_failed = True
                             emit_status(f"「{name}」凭证不完整，跳过", ok=False)
                             break
                         remain = self.store.remaining_seconds(account_id) if cred_ready else 0
@@ -2744,6 +2750,12 @@ class CertificateApp(ctk.CTk):
                         break
                     if stop_reason:
                         break
+                    if not account_done and not account_failed:
+                        failed += 1
+                        emit_status(
+                            f"「{name}」达到 {MAX_LISTING_ROUNDS} 轮仍未拉完列表，先换下一个（进度已缓存）",
+                            ok=False,
+                        )
                     pause(15.0)
             except Exception as exc:  # noqa: BLE001
                 stop_reason = str(exc)
