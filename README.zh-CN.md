@@ -14,7 +14,7 @@
 </p>
 
 > 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
-> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.2**）。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.3**）。  
 > 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
@@ -89,7 +89,7 @@ git pull
 ```bash
 # Intel Mac
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 应显示 1.9.2
+# 应显示 1.9.3
 ```
 
 Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
@@ -210,6 +210,22 @@ python main.py
 2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
 3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
 
+### 无人值守拉列表（macOS，1.9.3）
+
+适合你不在电脑前、但微信已登录、Mac **不合盖不锁屏** 的时候。它**不会**点「删除」，也**不会**下正文。
+
+1. 凭证管理里把要处理的号都变成 **等待凭证**（批量导入或一键续约全部）。
+2. 首次使用请打开权限：
+   - 系统设置 → 隐私与安全性 → **辅助功能**：勾选 Terminal 或你用来启动 `main.py` 的 Python。
+   - Safari → 设置 → 高级 → 显示开发者功能；菜单「开发」→ 勾选 **允许来自 Apple 事件的 JavaScript**。
+3. 确认微信桌面已登录、Schinza 代理已开（点无人值守时会自动开代理）。
+4. 历史文章 → **无人值守拉列表**。
+5. 对每个等待凭证的号，程序会：用 Safari 打开文章 → 点击标题下蓝字公众号名 → 点「前往」→ 等凭证入库 → **只翻页拉列表** → 换下一个。号与号之间间隔约 6 秒。
+6. 列表已在缓存中的号会跳过。100 页以上的号若 30 分钟没拉完，会留下断点，队列继续下一个；以后再续约即可接着翻。
+7. 出现频控时**整队停止**。点「停止队列」可随时停。
+
+结束后公众号卡片都还在。正文请稍后对已缓存的号点 **继续归档正文**（仍是单请求、8–15 秒）。
+
 ### 正文节奏与风控
 
 - 不会并发下载多篇。
@@ -271,7 +287,7 @@ python run.py status
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git branch --show-current    # 应为 scalable-archive
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.2
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.3
 .venv-intel/bin/python main.py
 ```
 

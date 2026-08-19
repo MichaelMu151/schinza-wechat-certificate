@@ -282,3 +282,51 @@ def test_pipeline_defers_bodies_when_list_incomplete_after_deadline(
     assert result["listing_complete"] is False
     assert result["archive"] is None
     assert "凭证窗口" in (result["listing_error"] or "")
+
+
+def test_pipeline_list_only_does_not_archive_when_complete(tmp_path: Path) -> None:
+    cache = HistoryCache(tmp_path / "history.sqlite")
+    archive_calls = 0
+
+    def fetch(_cred, **_kwargs):
+        return {
+            "ok": True,
+            "articles": [
+                {
+                    "identity": "mid:1|idx:1|sn:a",
+                    "title": "一",
+                    "link": "https://mp.weixin.qq.com/s/a",
+                    "publish_ts": 1,
+                }
+            ],
+            "pages": 1,
+            "hit_page_cap": False,
+            "next_offset": 10,
+            "cancelled": False,
+        }
+
+    def archive(articles, **_k):
+        nonlocal archive_calls
+        archive_calls += 1
+        return {"ok": len(articles), "failed": 0, "skipped": 0, "cancelled": False}
+
+    result = run_list_and_archive(
+        {"__biz": "biz", "uin": "u", "key": "k"},
+        account_id="acc-1",
+        account_name="测试医院",
+        cache=cache,
+        days=None,
+        date_range=None,
+        start_ts=None,
+        end_ts=None,
+        sightings=[],
+        out_dir=tmp_path / "out",
+        list_only=True,
+        fetch_history=fetch,
+        archive=archive,
+        batch_pause_s=0,
+    )
+    assert result["listing_complete"] is True
+    assert result["articles"] == 1
+    assert result["archive"] is None
+    assert archive_calls == 0

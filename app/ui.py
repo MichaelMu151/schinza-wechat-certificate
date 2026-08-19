@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import queue
 import re
+import subprocess
 import sys
 import threading
 import time
@@ -29,6 +30,12 @@ from app.article_reader import (
     format_key_for_article_label,
 )
 from app.history_pipeline import run_list_and_archive
+from app.safari_handoff import accessibility_hint, handoff_article_to_wechat
+from app.unattended_queue import (
+    is_rate_limit_listing_error,
+    listing_already_complete,
+    select_awaiting_accounts,
+)
 from app.ca_setup import (
     PROXY_HOST,
     PROXY_PORT,
@@ -283,6 +290,8 @@ class CertificateApp(ctk.CTk):
         self._history_cred: dict[str, Any] = {}
         self._history_fetching = False
         self._history_cancel = False
+        self._unattended_running = False
+        self._caffeinate_proc: subprocess.Popen[bytes] | None = None
         self._pipeline_out_dir = ""
         self._account_options: list[tuple[str, str]] = []  # (label, id)
         self._history_account_id: str | None = None
@@ -784,7 +793,7 @@ class CertificateApp(ctk.CTk):
 
         ctk.CTkLabel(
             panel,
-            text="凭证约 30 分钟，只用于拉列表。列表拉完后才下正文（正文不消耗凭证）。窗口结束而列表未完时请先续约；过期后可点「继续归档正文」。",
+            text="凭证约 30 分钟只用于拉列表。点「无人值守拉列表」会依次处理所有「等待凭证」的号：Safari 打开文章 → 点蓝字公众号名 → 前往微信 → 只拉列表，完成后换下一个，不删号、不下正文。",
             font=ctk.CTkFont(family=UI_FONT, size=12),
             text_color=COLORS["muted"],
             anchor="w",
@@ -879,6 +888,19 @@ class CertificateApp(ctk.CTk):
             hover_color="#3a4a5e",
             command=self.refresh_history_account_options,
         ).pack(side="left")
+        self.hist_unattended_btn = ctk.CTkButton(
+            fmt_row,
+            text="无人值守拉列表",
+            width=128,
+            height=32,
+            corner_radius=8,
+            fg_color=COLORS["accent"],
+            hover_color=COLORS["accent_hover"],
+            text_color="#052e16",
+            font=ctk.CTkFont(family=UI_FONT, size=12, weight="bold"),
+            command=self.start_unattended_list_queue,
+        )
+        self.hist_unattended_btn.pack(side="left", padx=(10, 0))
 
         self.hist_status = ctk.CTkLabel(
             panel,
@@ -2459,7 +2481,214 @@ class CertificateApp(ctk.CTk):
     def cancel_history_fetch(self) -> None:
         self._history_cancel = True
         self.hist_fetch_btn.configure(state="disabled", text="正在停止…")
-        self.set_hist_status("正在安全停止；已写入的列表和正文会保留。", ok=False)
+        if hasattr(self, "hist_unattended_btn"):
+            self.hist_unattended_btn.configure(state="disabled", text="正在停止…")
+        self.set_hist_status("正在安全停止；已写入的列表会保留，不会删除公众号。", ok=False)
+
+    def _stop_caffeinate(self) -> None:
+        proc = self._caffeinate_proc
+        self._caffeinate_proc = None
+        if proc is None:
+            return
+        try:
+            proc.terminate()
+        except Exception:
+            pass
+
+    def _set_unattended_idle_buttons(self) -> None:
+        self.hist_fetch_btn.configure(state="normal", text=self._fetch_btn_label())
+        if hasattr(self, "hist_unattended_btn"):
+            self.hist_unattended_btn.configure(state="normal", text="无人值守拉列表")
+
+    def start_unattended_list_queue(self) -> None:
+        if self._history_fetching:
+            self.cancel_history_fetch()
+            return
+        if sys.platform != "darwin":
+            self.set_hist_status("无人值守拉列表目前只支持 macOS + Safari + 微信桌面。", ok=False)
+            return
+        rows = select_awaiting_accounts(
+            self.store.list_accounts(),
+            self.history_cache,
+            days=self._history_days,
+            date_range=self._history_range_iso,
+        )
+        if not rows:
+            self.set_hist_status(
+                "没有「等待凭证」且尚未拉完列表的公众号。请先在凭证管理添加/续约。",
+                ok=False,
+            )
+            return
+        if not self._ensure_proxy_for_capture():
+            return
+        self._clear_bulk_renew()
+        self._history_fetching = True
+        self._unattended_running = True
+        self._history_cancel = False
+        self.hist_fetch_btn.configure(text="停止", state="normal")
+        self.hist_unattended_btn.configure(text="停止队列", state="normal")
+        self._show_tab("history")
+        self.set_hist_status(
+            f"无人值守：{len(rows)} 个等待凭证的号将依次只拉列表。"
+            + accessibility_hint(),
+            ok=True,
+        )
+        self._append_hist_log(f"无人值守开始，共 {len(rows)} 个号（不下正文、不删除）")
+        try:
+            self._caffeinate_proc = subprocess.Popen(["caffeinate", "-dim"])
+        except Exception:
+            self._caffeinate_proc = None
+
+        days = self._history_days
+        date_range = self._history_range_iso
+        start_ts = end_ts = None
+        if date_range:
+            start_ts = _iso_date_to_ts(date_range[0])
+            end_ts = _iso_date_to_ts(date_range[1], end_of_day=True)
+        fmt_key = self._resolve_article_fmt(self.article_fmt_menu.get())
+        queue_rows = list(rows)
+
+        def emit_status(text: str, ok: bool | None = True) -> None:
+            self.after(0, lambda t=text, o=ok: self.set_hist_status(t, ok=o))
+            self.after(0, lambda t=text: self._append_hist_log(t))
+
+        def wait_active(account_id: str, timeout_s: float = 100.0) -> bool:
+            deadline = time.time() + timeout_s
+            while time.time() < deadline:
+                if self._history_cancel:
+                    return False
+                if self.store.is_active(account_id):
+                    return True
+                time.sleep(1.0)
+            return self.store.is_active(account_id)
+
+        def worker() -> None:
+            done = skipped = failed = 0
+            stop_reason = ""
+            try:
+                for index, row in enumerate(queue_rows, start=1):
+                    if self._history_cancel:
+                        stop_reason = "已停止"
+                        break
+                    account_id = str(row["id"])
+                    name = str(row.get("name") or "未命名")
+                    url = str(row.get("article_url") or "").strip()
+                    emit_status(f"[{index}/{len(queue_rows)}] 开始「{name}」：打开 Safari 文章")
+                    if listing_already_complete(
+                        self.history_cache,
+                        account_id,
+                        days=days,
+                        date_range=date_range,
+                    ):
+                        skipped += 1
+                        emit_status(f"「{name}」列表已在缓存中，跳过")
+                        continue
+                    self._pending_capture_id = account_id
+                    self.store.set_awaiting(account_id)
+                    self.watcher.enable()
+                    self.mitm.reset_capture_state()
+                    try:
+                        handoff_article_to_wechat(url)
+                    except Exception as exc:  # noqa: BLE001
+                        failed += 1
+                        emit_status(f"「{name}」Safari/前往失败：{exc}", ok=False)
+                        continue
+                    emit_status(f"「{name}」已点前往，等待凭证入库…")
+                    if not wait_active(account_id):
+                        failed += 1
+                        emit_status(
+                            f"「{name}」等待凭证超时。请确认微信已打开该号且代理未关。",
+                            ok=False,
+                        )
+                        continue
+                    fresh = self.store.get(account_id) or row
+                    cred = dict(fresh.get("credentials") or {})
+                    if not cred.get("__biz") and fresh.get("biz"):
+                        cred["__biz"] = fresh["biz"]
+                    if not (cred.get("__biz") and cred.get("uin") and cred.get("key")):
+                        failed += 1
+                        emit_status(f"「{name}」凭证不完整，跳过", ok=False)
+                        continue
+                    remain = self.store.remaining_seconds(account_id)
+                    buffer_s = 90 if remain >= 120 else min(15, max(0, remain - 5))
+                    cred_deadline_ts = time.time() + max(0, remain - buffer_s)
+                    safe_account = re.sub(r'[\\/:*?"<>|]+', "_", name or "公众号")[:60]
+                    out_dir = self.root_dir / "data" / "archives" / safe_account
+                    out_dir.mkdir(parents=True, exist_ok=True)
+                    self._pipeline_out_dir = str(out_dir)
+                    self.sightings.load()
+                    sightings = self.sightings.list_for_biz(
+                        str(cred.get("__biz") or fresh.get("biz") or "")
+                    )
+                    emit_status(
+                        f"「{name}」凭证剩余 {_fmt_remain(remain)}，开始只拉列表"
+                    )
+                    result = run_list_and_archive(
+                        cred,
+                        account_id=account_id,
+                        account_name=name,
+                        cache=self.history_cache,
+                        days=days,
+                        date_range=date_range,
+                        start_ts=start_ts,
+                        end_ts=end_ts,
+                        sightings=sightings,
+                        out_dir=out_dir,
+                        fmt=fmt_key,
+                        skip_listing=False,
+                        list_only=True,
+                        cred_deadline_ts=cred_deadline_ts,
+                        on_progress=lambda event: self.after(
+                            0, lambda e=dict(event): self._update_pipeline_progress(e)
+                        ),
+                        should_cancel=lambda: self._history_cancel,
+                    )
+                    listing_error = str(result.get("listing_error") or "")
+                    articles = int(result.get("articles") or 0)
+                    pages = int(result.get("pages") or 0)
+                    complete = bool(result.get("listing_complete"))
+                    if result.get("cancelled"):
+                        stop_reason = "已停止"
+                        emit_status(
+                            f"「{name}」已停止：列表 {articles} 篇 · {pages} 页已缓存"
+                        )
+                        break
+                    if is_rate_limit_listing_error(listing_error):
+                        failed += 1
+                        stop_reason = listing_error
+                        emit_status(
+                            f"「{name}」触发频控（{listing_error}）。整队停止，请等数小时到一天。",
+                            ok=False,
+                        )
+                        break
+                    done += 1
+                    flag = "已完成" if complete else "未拉完（窗口结束，已缓存）"
+                    emit_status(
+                        f"「{name}」{flag}：列表 {articles} 篇 · {pages} 页。不删号，换下一个。"
+                    )
+                    time.sleep(6.0)
+            except Exception as exc:  # noqa: BLE001
+                stop_reason = str(exc)
+                emit_status(f"无人值守异常：{exc}", ok=False)
+
+            def finish() -> None:
+                self._history_fetching = False
+                self._unattended_running = False
+                self._history_cancel = False
+                self._pending_capture_id = None
+                self._stop_caffeinate()
+                self._set_unattended_idle_buttons()
+                extra = f"；{stop_reason}" if stop_reason else ""
+                self.set_hist_status(
+                    f"无人值守结束：完成 {done} · 跳过 {skipped} · 失败 {failed}"
+                    f"{extra}。公众号均保留；正文请稍后点「继续归档正文」。",
+                    ok=not stop_reason or stop_reason == "已停止",
+                )
+                self.refresh_history_account_options()
+
+            self.after(0, finish)
+
+        threading.Thread(target=worker, name="schinza-unattended-list", daemon=True).start()
 
     def start_history_pipeline(self) -> None:
         if self._history_fetching:
@@ -2568,6 +2797,8 @@ class CertificateApp(ctk.CTk):
         self._history_fetching = False
         self._history_cancel = False
         self.hist_fetch_btn.configure(state="normal", text=self._fetch_btn_label())
+        if hasattr(self, "hist_unattended_btn") and not self._unattended_running:
+            self.hist_unattended_btn.configure(state="normal", text="无人值守拉列表")
         articles = int(result.get("articles") or 0)
         pages = int(result.get("pages") or 0)
         elapsed = int(result.get("elapsed_s") or 0)
@@ -2686,9 +2917,13 @@ class CertificateApp(ctk.CTk):
             self.proxy_btn.configure(text="手动启停代理")
         if self._tab == "history" and not self._history_fetching:
             self.hist_fetch_btn.configure(text=self._fetch_btn_label())
+            if hasattr(self, "hist_unattended_btn"):
+                self.hist_unattended_btn.configure(text="无人值守拉列表")
         self.after(1000, self._tick)
 
     def _on_close(self) -> None:
+        self._history_cancel = True
+        self._stop_caffeinate()
         self.watcher.stop()
         try:
             self.mitm.stop(restore_proxy=True)

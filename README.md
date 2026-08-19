@@ -17,7 +17,7 @@
 
 > Based on upstream Schinza 1.8.9. Feature branch:
 > [`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)
-> (version **1.9.2**). Upstream `main` and GitHub Releases **do not** include
+> (version **1.9.3**). Upstream `main` and GitHub Releases **do not** include
 > full-history resume or list-first archiving.
 
 The step-by-step Chinese guide is the canonical walkthrough:
@@ -82,7 +82,7 @@ Updates: `git pull` on `scalable-archive`. Check version:
 
 ```bash
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 1.9.2
+# 1.9.3
 ```
 
 ---
@@ -165,6 +165,12 @@ to a day. Do not raise concurrency.
 Renew: Credential Manager → **Renew** → restart WeChat if needed → re-open the
 article or scroll history → same account on the History tab → click again.
 Paging resumes from the cached offset.
+
+On macOS, **无人值守拉列表** processes every `awaiting` account: Safari opens
+the article, clicks the blue name under the title, clicks 前往, waits for
+credentials, **lists only**, then moves on. It does not delete cards or
+download bodies. Enable Accessibility for Python/Terminal and Safari Develop →
+Allow JavaScript from Apple Events. Keep the Mac awake and WeChat signed in.
 
 Archive layout (no short-lived secrets):
 

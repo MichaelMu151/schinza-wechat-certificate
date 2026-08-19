@@ -49,6 +49,7 @@ def run_list_and_archive(
     max_pages_per_batch: int = 100,
     batch_pause_s: float = 1.0,
     skip_listing: bool = False,
+    list_only: bool = False,
     cred_deadline_ts: float | None = None,
     fetch_history: Callable[..., dict[str, Any]] | None = None,
     archive: Callable[..., dict[str, Any]] | None = None,
@@ -198,6 +199,20 @@ def run_list_and_archive(
                 "stage": "done",
                 "status": "empty",
                 "title": listing_error or "没有可归档的文章",
+            }
+        )
+        return summary
+
+    # Unattended listing spends the credential window on paging only.
+    if list_only:
+        emit(
+            {
+                "stage": "done",
+                "status": "list_only",
+                "title": (
+                    f"列表{'已完成' if listing_complete else '未拉完'}，"
+                    f"已缓存 {len(articles)} 篇；按设定不下正文。"
+                ),
             }
         )
         return summary
