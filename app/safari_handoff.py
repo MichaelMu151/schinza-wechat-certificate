@@ -1,9 +1,10 @@
 """Open a WeChat article in Safari and hand it off to WeChat Desktop.
 
 The article page's blue account name (#js_name, under the title) must be
-clicked; that always shows 「即将前往微信打开此文章」.  Then click 「前往」.
-Credential capture still happens in Schinza's MITM — this module only drives
-Safari / the confirmation dialog.
+clicked; that shows 「即将前往微信打开此文章」.  Then 「前往」 must be clicked.
+
+That confirm UI is usually a **Safari system sheet**, not a DOM button.
+JavaScript cannot press it.  Accessibility + Return are required.
 """
 
 from __future__ import annotations
@@ -27,14 +28,45 @@ CLICK_NAME_JS = (
 
 CLICK_GO_JS = (
     "(function () {"
-    " var primary = document.querySelector("
-    "  '.weui-dialog__btn_primary, a.weui-dialog__btn_primary, .weui-dialog__btn.weui-dialog__btn_primary'"
-    " );"
-    " if (primary) { primary.click(); return 'clicked-primary'; }"
-    " var nodes = document.querySelectorAll('a, button, span, div, input');"
-    " for (var i = 0; i < nodes.length; i++) {"
-    "  var t = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();"
-    "  if (t === '前往') { nodes[i].click(); return 'clicked-go'; }"
+    " function forceClick(el) {"
+    "  if (!el) return;"
+    "  try { el.focus(); } catch (e1) {}"
+    "  ['pointerdown','mousedown','touchstart','pointerup','mouseup','touchend','click'].forEach(function (type) {"
+    "   try {"
+    "    var ev = type.indexOf('touch') === 0"
+    "      ? new Event(type, {bubbles:true,cancelable:true})"
+    "      : new MouseEvent(type, {bubbles:true,cancelable:true,view:window,buttons:1});"
+    "    el.dispatchEvent(ev);"
+    "   } catch (e2) {}"
+    "  });"
+    "  try { el.click(); } catch (e3) {}"
+    " }"
+    " function docsOf(win) {"
+    "  var out = [];"
+    "  try { out.push(win.document); } catch (e4) { return out; }"
+    "  var frames = win.document.querySelectorAll('iframe');"
+    "  for (var i = 0; i < frames.length; i++) {"
+    "   try { out = out.concat(docsOf(frames[i].contentWindow)); } catch (e5) {}"
+    "  }"
+    "  return out;"
+    " }"
+    " var docs = docsOf(window);"
+    " for (var d = 0; d < docs.length; d++) {"
+    "  var doc = docs[d];"
+    "  var primary = doc.querySelector("
+    "   '.weui-dialog__btn_primary, a.weui-dialog__btn_primary,"
+    "    .weui-dialog__btn.weui-dialog__btn_primary, .weui-half-screen-dialog__btn_primary'"
+    "  );"
+    "  if (primary) { forceClick(primary); return 'clicked-primary'; }"
+    "  var nodes = doc.querySelectorAll('a, button, span, div, input');"
+    "  for (var i = 0; i < nodes.length; i++) {"
+    "   var t = (nodes[i].innerText || nodes[i].textContent || '').replace(/\\s+/g, ' ').trim();"
+    "   if (t === '前往' || t === '打开') {"
+    "    var target = nodes[i].closest('a, button, .weui-dialog__btn') || nodes[i];"
+    "    forceClick(target);"
+    "    return 'clicked-go';"
+    "   }"
+    "  }"
     " }"
     " return 'go-not-found';"
     "})();"
@@ -48,6 +80,8 @@ READY_JS = (
 )
 
 TRUE_JS = "true"
+
+WECHAT_PROCESS_NAMES = ("微信", "WeChat", "Weixin")
 
 
 def _as_literal(text: str) -> str:
@@ -163,26 +197,137 @@ def wait_safari_article(*, timeout_s: float = 40.0, run: RunFn | None = None) ->
     raise RuntimeError(f"Safari 文章页未就绪：{last}")
 
 
-def click_system_go_button(*, run: RunFn | None = None) -> str:
+def frontmost_app_name(*, run: RunFn | None = None) -> str:
+    try:
+        return _run_osascript(
+            'tell application "System Events" to get name of first process whose frontmost is true',
+            timeout=8,
+            run=run,
+        )
+    except Exception:
+        return ""
+
+
+def is_wechat_app(name: str) -> bool:
+    text = (name or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    return text in WECHAT_PROCESS_NAMES or "wechat" in lowered or "weixin" in lowered or "微信" in text
+
+
+def safari_has_sheet(*, run: RunFn | None = None) -> bool:
     source = """
 tell application "System Events"
-  set procs to {"Safari", "微信", "WeChat", "Weixin"}
-  repeat with procName in procs
-    if exists process procName then
-      tell process procName
+  if not (exists process "Safari") then return "no-safari"
+  tell process "Safari"
+    if (count of windows) is 0 then return "no-window"
+    try
+      if (count of sheets of window 1) > 0 then return "has-sheet"
+    end try
+    return "no-sheet"
+  end tell
+end tell
+"""
+    try:
+        return _run_osascript(source, timeout=8, run=run) == "has-sheet"
+    except Exception:
+        return False
+
+
+def press_safari_confirm_key(*, run: RunFn | None = None) -> str:
+    """Return activates the default (right-hand) button on a Safari sheet."""
+
+    source = """
+tell application "Safari" to activate
+delay 0.15
+tell application "System Events"
+  if not (exists process "Safari") then return "no-safari"
+  tell process "Safari"
+    set frontmost to true
+    delay 0.1
+    try
+      if (count of sheets of window 1) > 0 then
+        key code 36
+        return "return-sheet"
+      end if
+    end try
+  end tell
+end tell
+return "no-sheet"
+"""
+    try:
+        return _run_osascript(source, timeout=10, run=run)
+    except Exception as exc:  # noqa: BLE001
+        return f"return-error:{exc}"
+
+
+def click_system_go_button(*, run: RunFn | None = None) -> str:
+    """Click Safari's native 「前往」/「打开」 sheet, then fall back to a deep search."""
+
+    source = """
+tell application "Safari" to activate
+delay 0.12
+tell application "System Events"
+  set targetNames to {"前往", "打开", "Open", "Go", "OK", "好"}
+  set procNames to {"Safari", "微信", "WeChat", "Weixin"}
+  repeat with procName in procNames
+    set pName to procName as text
+    if exists process pName then
+      tell process pName
         set frontmost to true
-        delay 0.2
+        delay 0.12
         try
-          click (first button whose name is "前往")
-          return "ax-clicked:" & procName
+          if (count of sheets of window 1) > 0 then
+            tell sheet 1 of window 1
+              repeat with nm in targetNames
+                try
+                  click (first button whose name is (nm as text))
+                  return "ax-sheet-name:" & pName & ":" & (nm as text)
+                end try
+              end repeat
+              try
+                click button 2
+                return "ax-sheet-btn2:" & pName
+              end try
+              try
+                click (last button)
+                return "ax-sheet-last:" & pName
+              end try
+              try
+                tell group 1
+                  repeat with nm in targetNames
+                    try
+                      click (first button whose name is (nm as text))
+                      return "ax-sheet-group:" & pName & ":" & (nm as text)
+                    end try
+                  end repeat
+                  try
+                    click button 2
+                    return "ax-sheet-group-btn2:" & pName
+                  end try
+                end tell
+              end try
+            end tell
+          end if
         end try
         try
-          click button "前往" of sheet 1 of window 1
-          return "ax-sheet:" & procName
+          tell window 1
+            repeat with nm in targetNames
+              try
+                click (first button whose name is (nm as text))
+                return "ax-window-name:" & pName & ":" & (nm as text)
+              end try
+            end repeat
+          end tell
         end try
         try
-          click button "前往" of window 1
-          return "ax-window:" & procName
+          repeat with nm in targetNames
+            try
+              click (first button whose name is (nm as text))
+              return "ax-process-name:" & pName & ":" & (nm as text)
+            end try
+          end repeat
         end try
       end tell
     end if
@@ -191,9 +336,48 @@ end tell
 return "ax-miss"
 """
     try:
-        return _run_osascript(source, timeout=15, run=run)
+        return _run_osascript(source, timeout=20, run=run)
     except Exception as exc:  # noqa: BLE001
         return f"ax-error:{exc}"
+
+
+def dump_safari_buttons(*, run: RunFn | None = None) -> str:
+    source = """
+tell application "System Events"
+  if not (exists process "Safari") then return "no-safari"
+  tell process "Safari"
+    set out to ""
+    try
+      set out to out & "window:" & (name of window 1 as text) & ";"
+    end try
+    try
+      if (count of sheets of window 1) > 0 then
+        set out to out & "sheet-buttons:"
+        repeat with b in buttons of sheet 1 of window 1
+          try
+            set out to out & "[" & (name of b as text) & "]"
+          end try
+        end repeat
+      else
+        set out to out & "no-sheet;"
+      end if
+    end try
+    try
+      set out to out & "win-buttons:"
+      repeat with b in buttons of window 1
+        try
+          set out to out & "[" & (name of b as text) & "]"
+        end try
+      end repeat
+    end try
+    return out
+  end tell
+end tell
+"""
+    try:
+        return _run_osascript(source, timeout=10, run=run)
+    except Exception as exc:  # noqa: BLE001
+        return f"dump-error:{exc}"
 
 
 def accessibility_hint() -> str:
@@ -202,6 +386,7 @@ def accessibility_hint() -> str:
         "python.org 的 Python（或你启动 main.py 的那个解释器），"
         "并在 Safari「开发」菜单勾选「允许来自 Apple 事件的 JavaScript」。"
         "Safari 设置 → 高级 → 显示开发者功能 后才会出现开发菜单。"
+        "「前往」是 Safari 系统弹窗，不是网页按钮，必须打开辅助功能才能点到。"
     )
 
 
@@ -237,6 +422,12 @@ def probe_macos_automation(*, run: RunFn | None = None) -> list[str]:
     return issues
 
 
+def _ax_clicked(result: str) -> bool:
+    return str(result).startswith("ax-") and not str(result).startswith(
+        ("ax-miss", "ax-error")
+    )
+
+
 def handoff_article_to_wechat(
     url: str,
     *,
@@ -261,18 +452,51 @@ def handoff_article_to_wechat(
         raise RuntimeError(
             f"未能点击文章页蓝字公众号名称（{name_hit}）。{accessibility_hint()}"
         )
+
+    wechat_before = is_wechat_app(frontmost_app_name(run=run))
     go_js = "go-not-found"
     ax = "skipped"
-    for _ in range(10):
-        sleep(0.5)
-        go_js = safari_do_javascript(CLICK_GO_JS, run=run)
-        if go_js.startswith("clicked"):
+    key_hit = "skipped"
+    sheet = False
+    handed_off = False
+
+    # Name click often opens a Safari *system* sheet. JS cannot press that.
+    # Handle the sheet first; only search the DOM when no sheet is up.
+    for _ in range(16):
+        sleep(0.35)
+        sheet = safari_has_sheet(run=run)
+        if sheet:
+            ax = click_system_go_button(run=run)
+            if not _ax_clicked(ax):
+                key_hit = press_safari_confirm_key(run=run)
+        else:
+            try:
+                go_js = safari_do_javascript(CLICK_GO_JS, run=run)
+            except Exception as exc:  # noqa: BLE001
+                go_js = f"js-error:{exc}"
+            ax = click_system_go_button(run=run)
+        wechat_now = is_wechat_app(frontmost_app_name(run=run))
+        if wechat_now and not wechat_before:
+            handed_off = True
             break
-    if not go_js.startswith("clicked"):
-        ax = click_system_go_button(run=run)
-        if not str(ax).startswith(("ax-clicked", "ax-sheet", "ax-window")):
-            raise RuntimeError(
-                f"已点击公众号名称，但没有点到「前往」（js={go_js}, ax={ax}）。"
-                + accessibility_hint()
-            )
-    return {"ready": ready, "name": name_hit, "go_js": go_js, "go_ax": ax}
+        if _ax_clicked(ax) or key_hit.startswith("return-sheet"):
+            handed_off = True
+            break
+        if str(go_js).startswith("clicked") and not safari_has_sheet(run=run):
+            handed_off = True
+            break
+
+    if not handed_off:
+        dump = dump_safari_buttons(run=run)
+        raise RuntimeError(
+            f"已点击公众号名称，但没有点到「前往」"
+            f"（js={go_js}, ax={ax}, key={key_hit}, sheet={sheet}, buttons={dump}）。"
+            + accessibility_hint()
+        )
+    return {
+        "ready": ready,
+        "name": name_hit,
+        "go_js": go_js,
+        "go_ax": ax,
+        "go_key": key_hit,
+    }

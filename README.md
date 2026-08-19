@@ -17,7 +17,7 @@
 
 > Based on upstream Schinza 1.8.9. Feature branch:
 > [`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)
-> (version **1.9.4**). Upstream `main` and GitHub Releases **do not** include
+> (version **1.9.5**). Upstream `main` and GitHub Releases **do not** include
 > full-history resume or list-first archiving.
 
 The step-by-step Chinese guide is the canonical walkthrough:
@@ -82,7 +82,7 @@ Updates: `git pull` on `scalable-archive`. Check version:
 
 ```bash
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 1.9.4
+# 1.9.5
 ```
 
 ---
@@ -166,11 +166,12 @@ Renew: Credential Manager → **Renew** → restart WeChat if needed → re-open
 article or scroll history → same account on the History tab → click again.
 Paging resumes from the cached offset.
 
-On macOS, **无人值守拉列表** (v1.9.4) first pages any still-active accounts
+On macOS, **无人值守拉列表** (v1.9.5) first pages any still-active accounts
 with an incomplete list (no Safari), then each `awaiting` account: Safari
-opens a **new tab**, waits for `#js_name`, clicks only that blue name, retries
-前往, waits for credentials, **lists only**, then moves on. It does not delete
-cards or download bodies. Enable Accessibility for Terminal / python.org
+opens a **new tab**, waits for `#js_name`, clicks only that blue name, then
+clicks Safari's **system sheet** 「前往」 (Accessibility + Return; this is not
+a page button). It lists only, then moves on. It does not delete cards or
+download bodies. Enable Accessibility for Terminal / python.org
 Python, and Safari Develop → Allow JavaScript from Apple Events. Keep the Mac
 awake (do not close the lid) and WeChat signed in. Rate-limit errors stop the
 whole queue. The canonical walkthrough is the **操作指南** in

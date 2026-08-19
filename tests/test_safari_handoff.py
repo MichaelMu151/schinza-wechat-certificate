@@ -36,6 +36,10 @@ def test_handoff_clicks_name_then_go(monkeypatch) -> None:
                 return FakeProc(stdout="clicked-js_name")
             if "前往" in stdin and "do JavaScript" in stdin:
                 return FakeProc(stdout="clicked-go")
+            if "whose frontmost" in stdin:
+                return FakeProc(stdout="Safari")
+            if 'return "has-sheet"' in stdin:
+                return FakeProc(stdout="no-sheet")
             return FakeProc(stdout="ok")
         raise AssertionError(cmd)
 
@@ -50,6 +54,39 @@ def test_handoff_clicks_name_then_go(monkeypatch) -> None:
     assert "has-name" in result["ready"]
     assert any(c[:3] == ["open", "-a", "Safari"] for c in calls)
     assert any(c[:1] == ["osascript"] for c in calls)
+
+
+def test_handoff_clicks_safari_system_sheet(monkeypatch) -> None:
+    def run(cmd, **kwargs):
+        stdin = kwargs.get("input") or ""
+        if cmd[:2] == ["open", "-a"]:
+            return FakeProc()
+        if cmd[:1] == ["osascript"]:
+            if "readyState" in stdin:
+                return FakeProc(
+                    stdout="complete|https://mp.weixin.qq.com/s/abc|has-name"
+                )
+            if "clicked-js_name" in stdin:
+                return FakeProc(stdout="clicked-js_name")
+            if "do JavaScript" in stdin and "前往" in stdin:
+                raise AssertionError("system sheet should not rely on page JS")
+            if "whose frontmost" in stdin:
+                return FakeProc(stdout="Safari")
+            if 'return "has-sheet"' in stdin:
+                return FakeProc(stdout="has-sheet")
+            if "click button 2" in stdin:
+                return FakeProc(stdout="ax-sheet-btn2:Safari")
+            return FakeProc(stdout="ok")
+        raise AssertionError(cmd)
+
+    monkeypatch.setattr("sys.platform", "darwin")
+    result = handoff_article_to_wechat(
+        "https://mp.weixin.qq.com/s/abc",
+        run=run,
+        sleep=lambda _s: None,
+    )
+    assert result["name"] == "clicked-js_name"
+    assert result["go_ax"].startswith("ax-sheet-btn2")
 
 
 def test_probe_reports_accessibility_failure(monkeypatch) -> None:
