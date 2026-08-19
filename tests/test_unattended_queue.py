@@ -4,6 +4,7 @@ from app.unattended_queue import (
     listing_already_complete,
     select_awaiting_accounts,
     select_unattended_queue,
+    should_stay_on_account,
 )
 
 
@@ -52,6 +53,43 @@ def test_select_unattended_queue_active_first(tmp_path) -> None:
     assert [item["row"]["id"] for item in queue] == ["live", "wait"]
     assert queue[0]["need_handoff"] is False
     assert queue[1]["need_handoff"] is True
+    assert queue[0]["skip_listing"] is False
+
+
+def test_select_unattended_keeps_complete_list_until_bodies_done(tmp_path) -> None:
+    cache = HistoryCache(tmp_path / "h.sqlite")
+    cache.save_batch(
+        make_query_key("listed", days=None, date_range=None),
+        account_id="listed",
+        account_name="已拉列表",
+        days=None,
+        date_range=None,
+        articles=[{"identity": "a", "title": "t", "link": "https://mp.weixin.qq.com/s/a"}],
+        next_offset=0,
+        complete=True,
+    )
+    rows = [
+        {"id": "listed", "status": "awaiting", "name": "已拉列表", "article_url": "https://mp.weixin.qq.com/s/a"},
+        {"id": "wait", "status": "awaiting", "name": "待拉", "article_url": "https://mp.weixin.qq.com/s/b"},
+    ]
+    queue = select_unattended_queue(
+        rows,
+        cache,
+        days=None,
+        date_range=None,
+        archives_root=tmp_path / "archives",
+    )
+    assert [item["row"]["id"] for item in queue] == ["wait", "listed"]
+    assert queue[0]["skip_listing"] is False
+    assert queue[1]["skip_listing"] is True
+    assert queue[1]["need_handoff"] is False
+
+
+def test_should_stay_on_account_until_list_complete() -> None:
+    assert should_stay_on_account({"listing_complete": False, "listing_error": "凭证窗口即将结束"}) is True
+    assert should_stay_on_account({"listing_complete": True}) is False
+    assert should_stay_on_account({"listing_complete": False, "listing_error": "unknownerror"}) is False
+    assert should_stay_on_account({"listing_complete": True, "archive": {"paused_rate_limit": True}}) is False
 
 
 def test_rate_limit_error_detection() -> None:

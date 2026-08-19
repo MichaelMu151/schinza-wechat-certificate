@@ -17,7 +17,7 @@
 
 > Based on upstream Schinza 1.8.9. Feature branch:
 > [`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)
-> (version **1.9.6**). Upstream `main` and GitHub Releases **do not** include
+> (version **1.9.7**). Upstream `main` and GitHub Releases **do not** include
 > full-history resume or list-first archiving.
 
 The step-by-step Chinese guide is the canonical walkthrough:
@@ -82,7 +82,7 @@ Updates: `git pull` on `scalable-archive`. Check version:
 
 ```bash
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 1.9.6
+# 1.9.7
 ```
 
 ---
@@ -166,13 +166,12 @@ Renew: Credential Manager → **Renew** → restart WeChat if needed → re-open
 article or scroll history → same account on the History tab → click again.
 Paging resumes from the cached offset.
 
-On macOS, **无人值守拉列表** (v1.9.6) first pages any still-active accounts
-with an incomplete list (no Safari), then each `awaiting` account: Safari
-opens a **new tab**, waits for `#js_name`, clicks only that blue name, then
-clicks Safari's **system sheet** 「前往」 at fullscreen coordinates (958, 640). It lists only, then moves on. It does not delete cards or
-download bodies. Enable Accessibility for Terminal / python.org
-Python, and Safari Develop → Allow JavaScript from Apple Events. Keep the Mac
-awake (do not close the lid) and WeChat signed in. Rate-limit errors stop the
+On macOS, **无人值守归档** (v1.9.7) finishes one account before the next:
+list until complete (recapture the same account if the 30-minute window
+ends), then archive bodies slowly, then move on. This avoids paging many
+accounts back-to-back, which triggers WeChat rate limits. Safari still
+opens a **new tab**, clicks `#js_name`, then 「前往」 at fullscreen
+coordinates (958, 640). Cards are not deleted. Rate-limit errors stop the
 whole queue. The canonical walkthrough is the **操作指南** in
 [README.zh-CN.md](./README.zh-CN.md).
 
