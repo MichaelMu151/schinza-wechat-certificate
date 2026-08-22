@@ -3008,7 +3008,7 @@ class CertificateApp(ctk.CTk):
         if self._tab == "history" and not self._history_fetching:
             self.hist_fetch_btn.configure(text=self._fetch_btn_label())
             if hasattr(self, "hist_unattended_btn"):
-            self.hist_unattended_btn.configure(text="无人值守归档")
+                self.hist_unattended_btn.configure(text="无人值守归档")
         self.after(1000, self._tick)
 
     def _on_close(self) -> None:

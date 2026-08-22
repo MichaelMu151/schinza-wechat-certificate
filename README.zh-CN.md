@@ -14,7 +14,7 @@
 </p>
 
 > 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
-> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.8**）。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.9**）。  
 > 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
@@ -89,7 +89,7 @@ git pull
 ```bash
 # Intel Mac
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 应显示 1.9.8
+# 应显示 1.9.9
 ```
 
 Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
@@ -143,7 +143,7 @@ python main.py
 
 ---
 
-## 操作指南（Intel Mac，版本 1.9.8）
+## 操作指南（Intel Mac，版本 1.9.9）
 
 环境已经装好、公众号已经批量导入之后，日常按这里做。换显示器或分辨率后，先看本节 **E. 「前往」坐标**。
 
@@ -159,7 +159,7 @@ python main.py
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git pull
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.8
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.9
 .venv-intel/bin/python main.py
 ```
 
@@ -300,7 +300,7 @@ cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
 3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
 
-### 无人值守归档（macOS，1.9.8）
+### 无人值守归档（macOS，1.9.9）
 
 细节与权限见上文 **操作指南**。补充行为说明：
 
@@ -372,7 +372,7 @@ python run.py status
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git branch --show-current    # 应为 scalable-archive
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.8
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.9
 .venv-intel/bin/python main.py
 ```
 
