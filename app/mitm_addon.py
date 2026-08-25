@@ -402,6 +402,7 @@ class CredentialCapture:
         self._last_saved_fp: dict[str, tuple[str, ...]] = {}
         self._last_sighting_fp: str | None = None
         self._last_debug_state: tuple | None = None
+        self._seen_hosts: set[str] = set()
         self._active_biz: str | None = None
 
     def reset_merge_state(self) -> None:
@@ -410,10 +411,18 @@ class CredentialCapture:
         self._last_saved_fp = {}
         self._last_sighting_fp = None
         self._last_debug_state = None
+        self._seen_hosts = set()
         self._active_biz = None
 
     def request(self, flow) -> None:  # type: ignore[no-untyped-def]
         url = flow.request.pretty_url
+        try:
+            host = flow.request.host or ""
+        except Exception:
+            host = ""
+        if host and host not in self._seen_hosts and len(self._seen_hosts) < 20:
+            self._seen_hosts.add(host)
+            _debug_log(f"看到流量 host={host[:80]}")
         try:
             headers = flow.request.headers
         except Exception:

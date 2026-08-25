@@ -307,6 +307,8 @@ class CertificateApp(ctk.CTk):
         self._sync_log_seq = 0
         self._sync_uploading = False
         self._sync_paused_proxy = False
+        self._last_ne_check = 0.0
+        self._ne_blockers: list[str] = []
         self._sync_ui_queue: queue.Queue[tuple[str, str | None] | tuple[None, None]] = (
             queue.Queue()
         )
@@ -614,6 +616,18 @@ class CertificateApp(ctk.CTk):
             command=self.toggle_proxy,
         )
         self.proxy_btn.pack(side="left", padx=(0, 16))
+
+        if sys.platform == "darwin":
+            ctk.CTkButton(
+                btns,
+                text="批准微信拦截",
+                width=120,
+                height=34,
+                corner_radius=10,
+                fg_color=COLORS["border"],
+                hover_color="#3a4a5e",
+                command=self.open_macos_intercept_approval,
+            ).pack(side="left", padx=(0, 16))
 
         self.proxy_lbl = ctk.CTkLabel(
             panel,
@@ -1423,6 +1437,43 @@ class CertificateApp(ctk.CTk):
 
     # ── credentials tab actions ───────────────────────────────────────
 
+    def open_macos_intercept_approval(self) -> None:
+        from app.macos_intercept import capture_warnings, open_redirector_approval
+
+        ok, msg = open_redirector_approval()
+        blockers = capture_warnings()
+        text = msg + (("\n" + "\n".join(blockers)) if blockers else "")
+        self.proxy_lbl.configure(
+            text=text,
+            text_color=COLORS["danger"] if blockers or not ok else COLORS["ok"],
+        )
+        self.set_status(text.split("\n")[0], ok=ok and not blockers)
+
+    def _refresh_macos_capture_health(self, *, force: bool = False) -> None:
+        if sys.platform != "darwin" or not self.mitm.running:
+            return
+        now = time.time()
+        if not force and now - self._last_ne_check < 5:
+            return
+        self._last_ne_check = now
+        from app.macos_intercept import capture_warnings
+
+        blockers = capture_warnings()
+        if blockers == self._ne_blockers:
+            return
+        self._ne_blockers = blockers
+        if blockers:
+            text = "\n".join(blockers)
+            self.proxy_lbl.configure(text=text, text_color=COLORS["danger"])
+            self.set_status(blockers[0], ok=False)
+        else:
+            tip = (
+                f"代理运行中 {PROXY_HOST}:{PROXY_PORT}。网络扩展已批准。"
+                "请完全退出并重启微信后再打开公众号文章。"
+            )
+            self.proxy_lbl.configure(text=tip, text_color=COLORS["ok"])
+            self.set_status(tip, ok=True)
+
     def install_ca(self) -> None:
         ok, msg = install_ca_platform(self.root_dir)
         self.proxy_lbl.configure(text=msg, text_color=COLORS["ok"] if ok else COLORS["danger"])
@@ -1442,27 +1493,34 @@ class CertificateApp(ctk.CTk):
         ok, msg = self.mitm.start(set_system_proxy=True)
         if ok:
             self.proxy_btn.configure(text="停止抓包代理")
-            tip = (
-                f"代理运行中 {PROXY_HOST}:{PROXY_PORT}。"
-                "请先「添加并抓包」绑定公众号，再在微信里打开文章；"
-                "仅开代理不会入库。"
-            )
-            self.proxy_lbl.configure(text=tip, text_color=COLORS["ok"])
-            self.set_status(tip, ok=True)
+            self._ne_blockers = []
+            self._refresh_macos_capture_health(force=True)
+            if not self._ne_blockers:
+                tip = (
+                    f"代理运行中 {PROXY_HOST}:{PROXY_PORT}。"
+                    "请先「添加并抓包」绑定公众号，再在微信里打开文章；"
+                    "仅开代理不会入库。"
+                )
+                self.proxy_lbl.configure(text=tip, text_color=COLORS["ok"])
+                self.set_status(tip, ok=True)
         else:
             self.proxy_lbl.configure(text=msg, text_color=COLORS["danger"])
             self.set_status(msg.split("\n")[0], ok=False)
 
     def _ensure_proxy_for_capture(self) -> bool:
         if self.mitm.running:
+            self._refresh_macos_capture_health(force=True)
             return True
         ok, msg = self.mitm.start(set_system_proxy=True)
         if ok:
             self.proxy_btn.configure(text="停止抓包代理")
-            self.proxy_lbl.configure(
-                text=f"抓包代理已自动启动 {PROXY_HOST}:{PROXY_PORT}",
-                text_color=COLORS["ok"],
-            )
+            self._ne_blockers = []
+            self._refresh_macos_capture_health(force=True)
+            if not self._ne_blockers:
+                self.proxy_lbl.configure(
+                    text=f"抓包代理已自动启动 {PROXY_HOST}:{PROXY_PORT}",
+                    text_color=COLORS["ok"],
+                )
         else:
             self.proxy_lbl.configure(text=msg, text_color=COLORS["danger"])
             self.set_status(msg, ok=False)
@@ -3007,6 +3065,7 @@ class CertificateApp(ctk.CTk):
 
     def _tick(self) -> None:
         self.store.mark_expired_if_needed()
+        self._refresh_macos_capture_health()
         self._pump_sync_queue()
         while True:
             try:

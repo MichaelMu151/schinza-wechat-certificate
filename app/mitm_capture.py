@@ -18,16 +18,27 @@ from app.ca_setup import PROXY_HOST, PROXY_PORT, prepare_mitm_confdir
 # ignores the macOS HTTP/HTTPS system proxy and often uses HTTP/3, so regular
 # mitmproxy mode never sees the traffic. Local redirect intercepts the process.
 MACOS_WECHAT_LOCAL_SPEC = (
-    "WeChat,WeChatAppEx,WeChatAppEx Helper,微信,Weixin"
+    "WeChat,WeChatAppEx,WeChatAppEx Helper,"
+    "WeChatAppEx Helper (Renderer),WeChatHelper,微信,Weixin"
 )
 
 
-def capture_proxy_modes(*, platform: str | None = None, use_local: bool = True) -> list[str]:
+def capture_proxy_modes(
+    *,
+    platform: str | None = None,
+    use_local: bool = True,
+    include_pids: bool = False,
+) -> list[str]:
     """Return mitmproxy mode strings for this OS."""
     plat = sys.platform if platform is None else platform
     modes = ["regular"]
     if plat == "darwin" and use_local:
-        modes.append(f"local:{MACOS_WECHAT_LOCAL_SPEC}")
+        spec = MACOS_WECHAT_LOCAL_SPEC
+        if include_pids:
+            from app.macos_intercept import wechat_intercept_spec
+
+            spec = wechat_intercept_spec(spec)
+        modes.append(f"local:{spec}")
     return modes
 
 try:
@@ -279,7 +290,7 @@ class MitmCaptureService:
             started = False
             used_modes: list[str] = []
             for use_local in (True, False) if sys.platform == "darwin" else (False,):
-                modes = capture_proxy_modes(use_local=use_local)
+                modes = capture_proxy_modes(use_local=use_local, include_pids=use_local)
                 self._start_error = None
                 self._started.clear()
                 self._thread = threading.Thread(
@@ -321,10 +332,19 @@ class MitmCaptureService:
 
             local_hint = ""
             if any(m.startswith("local:") for m in used_modes):
-                local_hint = (
-                    "\n已同时开启微信进程透明拦截（WeChat 4 的 WeChatAppEx 不走系统 HTTP 代理）。"
-                    "若弹出网络过滤 / VPN 权限，请允许，然后完全退出并重启微信。"
-                )
+                from app.macos_intercept import capture_warnings, open_redirector_approval
+
+                blockers = capture_warnings()
+                if blockers:
+                    try:
+                        open_redirector_approval()
+                    except Exception:
+                        pass
+                    local_hint = "\n" + "\n".join(blockers)
+                else:
+                    local_hint = (
+                        "\n已开启微信进程透明拦截。若刚批准网络扩展，请完全退出并重启微信。"
+                    )
             elif sys.platform == "darwin":
                 local_hint = (
                     "\n未能开启微信进程透明拦截，目前只有系统 HTTP 代理；"
