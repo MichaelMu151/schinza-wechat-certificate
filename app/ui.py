@@ -1836,9 +1836,42 @@ class CertificateApp(ctk.CTk):
         row = self.store.get(account_id)
         if not row:
             return
-        url = row.get("article_url") or ""
-        if url:
+        url = str(row.get("article_url") or "").strip()
+        if not url:
+            self.set_status("该公众号没有文章链接", ok=False)
+            return
+        if sys.platform != "darwin":
             self._open_url(url)
+            return
+        if not self._ensure_proxy_for_capture():
+            return
+        self._pending_capture_id = account_id
+        self.store.set_awaiting(account_id)
+        self.watcher.enable()
+        self.mitm.reset_capture_state()
+        name = str(row.get("name") or "")
+        self.set_status(
+            f"正在用 Safari 打开「{name}」文章并点「前往」跳转微信…",
+            ok=True,
+        )
+
+        def worker() -> None:
+            try:
+                handoff_article_to_wechat(url)
+            except Exception as exc:  # noqa: BLE001
+                msg = f"跳转微信失败：{exc}"
+                self.after(0, lambda m=msg: self.set_status(m, ok=False))
+                return
+            self.after(
+                0,
+                lambda: self.set_status(
+                    "已点「前往」。请确认微信打开了该公众号文章；"
+                    "凭证入库后卡片会变绿。抓包明细见 data/capture_debug.log",
+                    ok=True,
+                ),
+            )
+
+        threading.Thread(target=worker, name="schinza-open-article", daemon=True).start()
 
     def delete_account(self, account_id: str) -> None:
         if self._pending_capture_id == account_id:

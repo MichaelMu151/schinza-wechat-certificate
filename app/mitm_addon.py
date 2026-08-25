@@ -48,6 +48,28 @@ def _debug_log(line: str) -> None:
         pass
 
 
+def _merge_from_urlencoded(text: str, into: dict[str, str]) -> bool:
+    if not text or "=" not in text:
+        return False
+    snippet = text[:16000]
+    if snippet.lstrip().startswith("{") or snippet.lstrip().startswith("<"):
+        return False
+    try:
+        q = parse_qs(snippet, keep_blank_values=False)
+    except Exception:
+        return False
+    changed = False
+    for k in KEYS:
+        vals = q.get(k) or []
+        if not vals or not vals[0]:
+            continue
+        v = unquote(vals[0])
+        if into.get(k) != v:
+            into[k] = v
+            changed = True
+    return changed
+
+
 def _merge_from_url(url: str, into: dict[str, str]) -> bool:
     try:
         u = urlparse(url)
@@ -379,7 +401,7 @@ class CredentialCapture:
         self.creds: dict[str, dict[str, str]] = {}
         self._last_saved_fp: dict[str, tuple[str, ...]] = {}
         self._last_sighting_fp: str | None = None
-        self._last_debug_state: tuple[str, tuple[str, ...]] | None = None
+        self._last_debug_state: tuple | None = None
         self._active_biz: str | None = None
 
     def reset_merge_state(self) -> None:
@@ -397,18 +419,39 @@ class CredentialCapture:
         except Exception:
             headers = None
         cookie = headers.get("Cookie", "") if headers is not None else ""
+        form = ""
+        try:
+            raw = flow.request.content or b""
+            if b"__biz=" in raw[:16000] or b"uin=" in raw[:16000]:
+                form = flow.request.get_text(strict=False) or ""
+        except Exception:
+            form = ""
 
-        # Attribute this request to a __biz (URL query, else Referer). Without
-        # attribution we CANNOT merge — multi-window renew would mix account A's
-        # key into account B.
+        # Attribute this request to a __biz (URL query, else Referer, else POST).
         biz = _effective_biz(url, headers)
+        if not biz and form:
+            tmp: dict[str, str] = {}
+            _merge_from_urlencoded(form, tmp)
+            biz = str(tmp.get("__biz") or "")
         if not biz:
+            if "mp.weixin.qq.com" in (url or ""):
+                path = ""
+                try:
+                    path = urlparse(url).path or ""
+                except Exception:
+                    path = ""
+                state_key = ("nobiz", path[:80])
+                if state_key != self._last_debug_state:
+                    self._last_debug_state = state_key
+                    _debug_log(f"到达 mp.weixin 但无 __biz path={path[:80]}")
             return
         self._active_biz = biz
         bucket = self.creds.setdefault(biz, {})
         bucket.setdefault("__biz", biz)
         changed = _merge_from_url(url, bucket)
         changed = _merge_from_cookie(cookie, bucket) or changed
+        if form:
+            changed = _merge_from_urlencoded(form, bucket) or changed
 
         # Article URL sightings — fill getmsg gaps for same-day later pushes
         sighting = extract_article_sighting(url)
@@ -500,6 +543,20 @@ class CredentialCapture:
             enriched = _enrich_sighting_from_html(html, base)
             if enriched.get("title") or enriched.get("publish_ts"):
                 _upsert_sighting(enriched)
+
+    def error(self, flow) -> None:  # type: ignore[no-untyped-def]
+        try:
+            host = flow.request.host or ""
+        except Exception:
+            host = ""
+        if "weixin.qq.com" not in host and "wechat.com" not in host:
+            return
+        err = ""
+        try:
+            err = str(flow.error)
+        except Exception:
+            err = "unknown"
+        _debug_log(f"代理错误 host={host[:60]} {err[:160]}")
 
 
 addons = [CredentialCapture()]

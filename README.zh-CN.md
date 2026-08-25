@@ -14,7 +14,7 @@
 </p>
 
 > 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
-> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.9.9**）。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.10.0**）。  
 > 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
@@ -89,7 +89,7 @@ git pull
 ```bash
 # Intel Mac
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 应显示 1.9.9
+# 应显示 1.10.0
 ```
 
 Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
@@ -143,7 +143,7 @@ python main.py
 
 ---
 
-## 操作指南（Intel Mac，版本 1.9.9）
+## 操作指南（Intel Mac，版本 1.10.0）
 
 环境已经装好、公众号已经批量导入之后，日常按这里做。换显示器或分辨率后，先看本节 **E. 「前往」坐标**。
 
@@ -159,7 +159,7 @@ python main.py
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git pull
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.9.9
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.10.0
 .venv-intel/bin/python main.py
 ```
 
@@ -263,9 +263,13 @@ cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 
 | 日志 | 含义 |
 |------|------|
+| 「抓包代理启动 mode=…local:WeChat…」 | 已拦截微信 4 的 WeChatAppEx 进程（不只靠系统 HTTP 代理） |
 | 「凭证已保存」 | 已捕获，等待界面刷新 |
 | 「截获…凭证不完整」 | 流量到了代理但缺 `key`，去滚动历史页 |
-| 文件为空 | 微信没走代理 → 再退出并重启微信 |
+| 「到达 mp.weixin 但无 __biz」 | 流量到了，但还不是带公众号参数的请求 |
+| 文件仍停在旧日期、没有新行 | 透明拦截没生效：看是否弹出过网络过滤权限；完全退出微信后再开 |
+
+微信 4.x 用内置 Chromium（`WeChatAppEx`）打开文章，**不会走** macOS 系统 HTTP/HTTPS 代理，所以只开 `127.0.0.1:8088` 会抓不到。本版本会额外用 mitmproxy 本机透明拦截微信进程。第一次开启时若弹出网络过滤 / VPN 类权限，请允许，然后**完全退出并重启微信**。
 
 凭证写入 `data/accounts.json`。其中含短期密钥，**不要提交 Git、不要上传网盘、不要发给他人**。
 
@@ -300,7 +304,7 @@ cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
 3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
 
-### 无人值守归档（macOS，1.9.9）
+### 无人值守归档（macOS，1.10.0）
 
 细节与权限见上文 **操作指南**。补充行为说明：
 
@@ -372,7 +376,7 @@ python run.py status
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git branch --show-current    # 应为 scalable-archive
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.9.9
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.10.0
 .venv-intel/bin/python main.py
 ```
 
