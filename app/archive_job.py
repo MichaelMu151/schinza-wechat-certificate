@@ -10,9 +10,7 @@ from __future__ import annotations
 import json
 import random
 import sqlite3
-import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable
@@ -229,56 +227,6 @@ def _is_transient_error(exc: Exception) -> bool:
     )
 
 
-class AdaptiveDelay:
-    """Lower delay after a run of successes; raise it after 风控."""
-
-    def __init__(self, sleep_min: float, sleep_max: float) -> None:
-        self.min_d = max(0.0, float(sleep_min))
-        self.max_d = max(self.min_d, float(sleep_max))
-        self.current = (self.min_d + self.max_d) / 2.0 if self.max_d > 0 else 0.0
-        self._success_streak = 0
-        self._lock = threading.Lock()
-
-    def next_delay(self) -> float:
-        with self._lock:
-            if self.current <= 0:
-                return 0.0
-            lo = max(self.min_d, self.current * 0.75)
-            hi = max(lo, min(self.max_d * 1.25, self.current * 1.25))
-            return random.uniform(lo, hi)
-
-    def on_success(self) -> None:
-        with self._lock:
-            self._success_streak += 1
-            if self._success_streak >= 20 and self.current > self.min_d:
-                self.current = max(self.min_d, self.current * 0.9)
-                self._success_streak = 0
-
-    def on_rate_limit(self) -> None:
-        with self._lock:
-            self._success_streak = 0
-            boosted = self.current * 1.7 if self.current > 0 else max(2.0, self.max_d)
-            self.current = min(max(self.max_d, 8.0), boosted)
-
-
-class RequestPacer:
-    """Serialize request *starts* so N workers overlap HTTP without bursting."""
-
-    def __init__(self, sleep_min: float, sleep_max: float) -> None:
-        self.delay = AdaptiveDelay(sleep_min, sleep_max)
-        self._lock = threading.Lock()
-        self._last = 0.0
-
-    def wait(self) -> None:
-        with self._lock:
-            wait_s = self.delay.next_delay()
-            if self._last > 0 and wait_s > 0:
-                gap = time.time() - self._last
-                if gap < wait_s:
-                    time.sleep(wait_s - gap)
-            self._last = time.time()
-
-
 def run_archive_job(
     articles: list[dict[str, Any]],
     *,
@@ -289,20 +237,15 @@ def run_archive_job(
     fetch_article: Callable[..., dict[str, Any]] | None = None,
     on_progress: ProgressCallback | None = None,
     should_cancel: CancelCallback | None = None,
-    sleep_min_s: float = 2.0,
-    sleep_max_s: float = 5.0,
-    max_workers: int = 2,
-    transient_retries: int = 1,
-    retry_backoff_s: tuple[float, float] = (4.0, 10.0),
+    sleep_min_s: float = 8.0,
+    sleep_max_s: float = 15.0,
+    max_workers: int = 1,
+    transient_retries: int = 2,
+    retry_backoff_s: tuple[float, float] = (12.0, 30.0),
     cooldown_after_failures: int = 3,
-    cooldown_range_s: tuple[float, float] = (30.0, 60.0),
+    cooldown_range_s: tuple[float, float] = (60.0, 120.0),
 ) -> dict[str, Any]:
-    """Archive public article HTML with adaptive pacing and bounded concurrency.
-
-    Bodies do not use the 30-minute cookie.  Default is two workers and 2–5 s
-    between request starts (same idea as wechat_crawler content fetch).  On
-    风控 the job still pauses immediately.
-    """
+    """Archive sequentially: completeness first, one request, 8–15 s apart."""
 
     output = Path(out_dir)
     article_dir = output / "articles"
@@ -394,18 +337,11 @@ def run_archive_job(
                 high = max(low, float(high) * attempts)
                 time.sleep(random.uniform(low, high))
 
-    worker_count = max(1, min(3, int(max_workers or 1)))
-    pacer = RequestPacer(sleep_min_s, sleep_max_s)
-    write_lock = threading.Lock()
-    pause_flag = threading.Event()
-
-    def handle_entry(entry: tuple[int, dict[str, Any], str, str, str]) -> None:
-        nonlocal completed, failed, retries, consecutive_failures, paused, cancelled
-        if pause_flag.is_set():
-            return
+    worker_count = 1
+    for pending_index, entry in enumerate(pending):
         if should_cancel and should_cancel():
             cancelled = True
-            return
+            break
         index, row, identity, title, link = entry
         if on_progress:
             on_progress(
@@ -428,11 +364,8 @@ def run_archive_job(
             "link": link,
         }
         try:
-            pacer.wait()
-            if pause_flag.is_set() or (should_cancel and should_cancel()):
-                cancelled = True
-                return
             parsed, used_retries = fetch_one(entry)
+            retries += used_retries
             if not parsed.get("publish_at") and row.get("publish_at"):
                 parsed["publish_at"] = row.get("publish_at")
             if not parsed.get("publish_ts") and row.get("publish_ts"):
@@ -443,41 +376,32 @@ def run_archive_job(
                 str(parsed.get("title") or title), ext=ext, index=index
             )
             path = write_article_export(article_dir / filename, parsed, fmt)
-            with write_lock:
-                retries += used_retries
-                completed += 1
-                consecutive_failures = 0
-                pacer.delay.on_success()
-                event = {
-                    **event_base,
-                    "status": "ok",
-                    "path": str(path),
-                    "retries": used_retries,
-                }
-                _append_jsonl(state_path, event)
-                archive_index.record(identity, status="ok", path=str(path))
+            completed += 1
+            consecutive_failures = 0
+            event = {
+                **event_base,
+                "status": "ok",
+                "path": str(path),
+                "retries": used_retries,
+            }
+            _append_jsonl(state_path, event)
+            archive_index.record(identity, status="ok", path=str(path))
         except Exception as exc:  # noqa: BLE001
+            failed += 1
+            consecutive_failures += 1
             error = describe_exception(exc)
-            cooldown_s = 0.0
-            with write_lock:
-                failed += 1
-                consecutive_failures += 1
-                event = {**event_base, "status": "failed", "error": error}
-                _append_jsonl(state_path, event)
-                _append_jsonl(failure_path, event)
-                archive_index.record(identity, status="failed", error=error)
-                if _is_rate_limit_error(exc):
-                    paused = True
-                    pause_flag.set()
-                    pacer.delay.on_rate_limit()
-                    return
-                if consecutive_failures >= max(1, int(cooldown_after_failures)):
-                    low, high = cooldown_range_s
-                    low = max(0.0, float(low))
-                    high = max(low, float(high))
-                    cooldown_s = random.uniform(low, high)
-                    consecutive_failures = 0
-            if cooldown_s:
+            event = {**event_base, "status": "failed", "error": error}
+            _append_jsonl(state_path, event)
+            _append_jsonl(failure_path, event)
+            archive_index.record(identity, status="failed", error=error)
+            if _is_rate_limit_error(exc):
+                paused = True
+                break
+            if consecutive_failures >= max(1, int(cooldown_after_failures)):
+                low, high = cooldown_range_s
+                low = max(0.0, float(low))
+                high = max(low, float(high))
+                cooldown_s = random.uniform(low, high)
                 if on_progress:
                     on_progress(
                         {
@@ -493,33 +417,15 @@ def run_archive_job(
                         }
                     )
                 time.sleep(cooldown_s)
-
-    pending_iter = iter(pending)
-    inflight: dict[Any, tuple[int, dict[str, Any], str, str, str]] = {}
-    with ThreadPoolExecutor(max_workers=worker_count) as pool:
-
-        def submit_next() -> None:
-            if pause_flag.is_set() or cancelled:
-                return
-            if should_cancel and should_cancel():
-                return
-            try:
-                nxt = next(pending_iter)
-            except StopIteration:
-                return
-            inflight[pool.submit(handle_entry, nxt)] = nxt
-
-        for _ in range(worker_count):
-            submit_next()
-        while inflight:
-            done = next(as_completed(inflight))
-            inflight.pop(done, None)
-            done.result()
-            if should_cancel and should_cancel():
-                cancelled = True
-                break
-            if not pause_flag.is_set() and not cancelled:
-                submit_next()
+                consecutive_failures = 0
+        if pending_index + 1 < len(pending):
+            low = max(0.0, float(sleep_min_s))
+            high = max(low, float(sleep_max_s))
+            if high:
+                time.sleep(random.uniform(low, high))
+        if should_cancel and should_cancel():
+            cancelled = True
+            break
 
     if pending and not paused and not cancelled:
         # Report progress after the final batch even when there was no callback

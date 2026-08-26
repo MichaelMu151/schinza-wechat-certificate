@@ -17,7 +17,7 @@
 
 > Based on upstream Schinza 1.8.9. Feature branch:
 > [`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)
-> (version **1.11.0**). Upstream `main` and GitHub Releases **do not** include
+> (version **1.11.1**). Upstream `main` and GitHub Releases **do not** include
 > full-history resume or list-first archiving.
 
 The step-by-step Chinese guide is the canonical walkthrough:
@@ -31,7 +31,7 @@ The step-by-step Chinese guide is the canonical walkthrough:
 |------|---------------------------|-------|--------|
 | Capture credentials | — | once | this repo, source GUI |
 | Page history **list** | **yes** | ~1 s/page | History tab |
-| Download article **bodies** | **no** | ~2–5 s between starts, 2 workers | History tab |
+| Download article **bodies** | **no** | 8–15 s/article, one at a time | History tab |
 | Merge into legacy SQLite | no | offline | sibling `wechat_crawler` |
 
 Use the half-hour window **only for paging**. If the list is incomplete, renew
@@ -82,7 +82,7 @@ Updates: `git pull` on `scalable-archive`. Check version:
 
 ```bash
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 1.11.0
+# 1.11.1
 ```
 
 ---
@@ -156,7 +156,7 @@ On **History Articles**, pick the account (default: all history) and click
 - Listing uses the 30‑minute window and writes `data/history_cache.sqlite`.
   Paging stops ~90 seconds before expiry.
 - Bodies start **only after the list is complete**. Public HTML is fetched
-  **without** expired cookies, two workers, 2–5 s between request starts.
+  **without** expired cookies, one request at a time, 8–15 s apart.
 - If the window ends with an incomplete list, bodies are **not** started, so
   you can renew immediately and keep paging.
 - After expiry, **继续归档正文** downloads cached URLs. Already-written files
@@ -169,7 +169,7 @@ Renew: Credential Manager → **Renew** → restart WeChat if needed → re-open
 article or scroll history → same account on the History tab → click again.
 Paging resumes from the cached offset.
 
-On macOS, **无人值守归档** (v1.11.0) finishes one account before the next:
+On macOS, **无人值守归档** (v1.11.1) finishes one account before the next:
 list until complete (recapture the same account if the 30-minute window
 ends), then archive bodies slowly, then move on. Safari clicks 「前往」 at a
 fullscreen screen point (`DEFAULT_GO_BUTTON_POINT` in

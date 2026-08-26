@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import os
+import socket
 import subprocess
 import sys
 import threading
@@ -40,6 +41,14 @@ def capture_proxy_modes(
             spec = wechat_intercept_spec(spec)
         modes.append(f"local:{spec}")
     return modes
+
+def _port_is_open(host: str, port: int, timeout: float = 0.25) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
 
 try:
     import winreg  # type: ignore
@@ -121,6 +130,9 @@ class MitmCaptureService:
         self._running = False
         self._capture_addon: Any = None
         self._active_modes: list[str] = []
+        self._want_running = False
+        self._local_proc: subprocess.Popen[bytes] | None = None
+        self._confdir: Path | None = None
 
     @property
     def running(self) -> bool:
@@ -213,7 +225,7 @@ class MitmCaptureService:
             self._thread = None
         self._running = False
 
-    def _thread_main(self, confdir: Path, modes: list[str]) -> None:
+    def _thread_main(self, confdir: Path) -> None:
         os.environ["SCHINZA_CAPTURE_INBOX"] = str(self.inbox)
         os.environ["SCHINZA_SIGHTINGS"] = str(
             self.app_root / "data" / "article_sightings.json"
@@ -224,20 +236,18 @@ class MitmCaptureService:
 
             from app.mitm_addon import CredentialCapture, _debug_log
 
+            # Regular HTTP proxy only in this process.  Mixing local-redirect
+            # into the same DumpMaster is what made the capture thread exit.
             opts = Options(
                 listen_host=PROXY_HOST,
                 listen_port=PROXY_PORT,
                 confdir=str(confdir),
-                mode=list(modes),
+                mode=["regular"],
             )
-            # block_global may be set after construct on some versions
             try:
-                opts.update(block_global=False, http3=True)
+                opts.update(block_global=False)
             except Exception:
-                try:
-                    opts.update(block_global=False)
-                except Exception:
-                    pass
+                pass
 
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
@@ -255,7 +265,7 @@ class MitmCaptureService:
                 master.addons.add(addon)
                 self._master = master
                 self._running = True
-                _debug_log(f"抓包代理启动 mode={','.join(modes)}")
+                _debug_log("抓包代理启动 mode=regular")
                 self._started.set()
                 await master.run()
 
@@ -273,6 +283,65 @@ class MitmCaptureService:
                 pass
             self._loop = None
 
+    def _stop_local_child(self) -> None:
+        proc = self._local_proc
+        self._local_proc = None
+        if proc is None:
+            return
+        if proc.poll() is None:
+            try:
+                proc.terminate()
+                proc.wait(timeout=3)
+            except Exception:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+
+    def _start_local_child(self, confdir: Path) -> str:
+        """Run WeChat process intercept in a separate mitmdump so it cannot kill 8088."""
+        from app.mitm_addon import _debug_log
+
+        addon = Path(__file__).resolve().parent / "mitm_addon.py"
+        log_path = self.inbox.parent / "mitm_local.log"
+        env = os.environ.copy()
+        env["SCHINZA_CAPTURE_INBOX"] = str(self.inbox)
+        env["SCHINZA_SIGHTINGS"] = str(self.app_root / "data" / "article_sightings.json")
+        cmd = [
+            sys.executable,
+            "-m",
+            "mitmproxy.tools.dump",
+            "--quiet",
+            "--set",
+            f"confdir={confdir}",
+            "--set",
+            "block_global=false",
+            "--mode",
+            f"local:{MACOS_WECHAT_LOCAL_SPEC}",
+            "-s",
+            str(addon),
+        ]
+        try:
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            log_fh = log_path.open("ab")
+            self._local_proc = subprocess.Popen(
+                cmd,
+                stdout=log_fh,
+                stderr=log_fh,
+                env=env,
+                cwd=str(self.app_root),
+            )
+        except Exception as exc:  # noqa: BLE001
+            _debug_log(f"透明拦截子进程启动失败：{exc}")
+            return f"透明拦截未启动：{exc}"
+        time.sleep(0.8)
+        if self._local_proc.poll() is not None:
+            self._local_proc = None
+            _debug_log("透明拦截子进程立即退出，详见 data/mitm_local.log")
+            return "透明拦截子进程立即退出（网络扩展可能仍未批准）。系统 HTTP 代理仍可用。"
+        _debug_log(f"透明拦截子进程已启动 pid={self._local_proc.pid}")
+        return "已另开微信进程透明拦截（与 8088 代理分开，互不影响）。"
+
     def start(self, *, set_system_proxy: bool = True) -> tuple[bool, str]:
         with self._lock:
             if self.running:
@@ -285,54 +354,41 @@ class MitmCaptureService:
 
             self.inbox.parent.mkdir(parents=True, exist_ok=True)
             self.clear_inbox()
+            self._confdir = confdir
+            self._start_error = None
+            self._started.clear()
+            self._want_running = True
+            self._thread = threading.Thread(
+                target=self._thread_main,
+                args=(confdir,),
+                name="schinza-mitm",
+                daemon=True,
+            )
+            self._thread.start()
 
-            last_err = ""
-            started = False
-            used_modes: list[str] = []
-            try_local = False
-            if sys.platform == "darwin":
-                try:
-                    from app.macos_intercept import redirector_state
-
-                    try_local = redirector_state() == "enabled"
-                except Exception:
-                    try_local = False
-            local_flags = (True, False) if try_local else (False,)
-            for use_local in local_flags:
-                modes = capture_proxy_modes(use_local=use_local, include_pids=False)
+            ok_wait = self._started.wait(timeout=12.0)
+            if not ok_wait:
+                self._want_running = False
+                self._shutdown_thread()
+                return False, "启动抓包超时，请检查端口 8088 是否被占用"
+            if self._start_error:
+                err = self._start_error
                 self._start_error = None
-                self._started.clear()
-                self._thread = threading.Thread(
-                    target=self._thread_main,
-                    args=(confdir, modes),
-                    name="schinza-mitm",
-                    daemon=True,
-                )
-                self._thread.start()
-                # Local redirect may prompt for a network-filter permission.
-                ok_wait = self._started.wait(timeout=40.0)
-                if not ok_wait:
-                    last_err = "启动抓包超时，请重试或检查端口 8088 是否被占用"
-                    self._shutdown_thread()
-                    continue
-                if self._start_error:
-                    last_err = self._start_error
-                    self._start_error = None
-                    self._shutdown_thread()
-                    continue
-                time.sleep(0.4)
+                self._want_running = False
+                self._shutdown_thread()
+                return False, f"启动抓包失败：{err}"
+
+            deadline = time.time() + 5.0
+            while time.time() < deadline and not _port_is_open(PROXY_HOST, PROXY_PORT):
                 if not self.running:
-                    last_err = "抓包线程已退出，请确认 mitmproxy-ca.pem 可用且 8088 空闲"
-                    self._shutdown_thread()
-                    continue
-                started = True
-                used_modes = modes
-                self._active_modes = modes
-                break
+                    break
+                time.sleep(0.15)
+            if not self.running or not _port_is_open(PROXY_HOST, PROXY_PORT):
+                self._want_running = False
+                self._shutdown_thread()
+                return False, "抓包线程已退出或 8088 未在监听，请确认 mitmproxy-ca.pem 可用且端口空闲"
 
-            if not started:
-                return False, f"启动抓包失败：{last_err}"
-
+            self._active_modes = ["regular"]
             proxy_msg = ""
             if set_system_proxy:
                 ok, proxy_msg = self.enable_system_proxy()
@@ -340,31 +396,24 @@ class MitmCaptureService:
                     proxy_msg = f"代理已启动，但系统代理设置失败：{proxy_msg}"
 
             local_hint = ""
-            if any(m.startswith("local:") for m in used_modes):
-                from app.macos_intercept import capture_warnings
+            if sys.platform == "darwin":
+                from app.macos_intercept import capture_warnings, redirector_state
 
+                state = redirector_state()
                 blockers = capture_warnings()
-                if blockers:
-                    local_hint = "\n" + "\n".join(blockers)
+                if state == "enabled":
+                    local_hint = "\n" + self._start_local_child(confdir)
+                    self._active_modes.append("local")
                 else:
+                    extra = ("\n" + "\n".join(blockers)) if blockers else ""
                     local_hint = (
-                        "\n已开启微信进程透明拦截。若刚批准网络扩展，请完全退出并重启微信。"
+                        "\n微信 4 不走系统代理。请先点「批准微信拦截」并完全重启微信；"
+                        "未批准前 8088 仍会保持运行，避免再把抓包线程拉崩。"
+                        + extra
                     )
-            elif sys.platform == "darwin":
-                from app.macos_intercept import capture_warnings
-
-                blockers = capture_warnings()
-                extra = ("\n" + "\n".join(blockers)) if blockers else ""
-                local_hint = (
-                    "\n当前只用系统 HTTP 代理（网络扩展尚未批准，不启动透明拦截以免抓包线程退出）。"
-                    "可点「批准微信拦截」后再重启代理。"
-                    + extra
-                    + (f"（{last_err}）" if last_err else "")
-                )
 
             return True, (
-                f"{prep_msg}\n抓包代理已启动 {PROXY_HOST}:{PROXY_PORT}"
-                f"（mode={','.join(used_modes)}）。"
+                f"{prep_msg}\n抓包代理已启动 {PROXY_HOST}:{PROXY_PORT}（mode=regular）。"
                 + (f"\n{proxy_msg}" if proxy_msg else "\n已尝试开启系统代理。")
                 + local_hint
                 + "\n请用微信桌面打开公众号文章（内置浏览器）。"
@@ -373,6 +422,8 @@ class MitmCaptureService:
     def stop(self, *, restore_proxy: bool = True) -> tuple[bool, str]:
         with self._lock:
             msg_parts: list[str] = []
+            self._want_running = False
+            self._stop_local_child()
             master = self._master
             if master is not None:
                 try:
@@ -381,7 +432,7 @@ class MitmCaptureService:
                     pass
                 self._master = None
             if self._thread is not None:
-                self._thread.join(timeout=3.0)
+                self._thread.join(timeout=5.0)
                 self._thread = None
                 msg_parts.append("已停止抓包代理")
             self._running = False

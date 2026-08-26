@@ -14,7 +14,7 @@
 </p>
 
 > 本 fork 基于上游 Schinza 1.8.9，保留原有凭证捕获流程。  
-> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.11.0**）。  
+> 当前功能分支：[`scalable-archive`](https://github.com/MichaelMu151/schinza-wechat-certificate/tree/scalable-archive)（版本 **1.11.1**）。  
 > 上游 `main` 与 GitHub Releases 里的预编译包**不包含**本指南中的全历史续拉与列表优先归档。
 
 ---
@@ -27,7 +27,7 @@
 |------|-------------------|------|--------|
 | 捕获 `uin` / `key` | — | 一次抓包 | 本仓库源码 GUI |
 | 翻页拉历史**列表** | **要** | 约 1 秒/页 | 本仓库「历史文章」 |
-| 下载文章**正文** | **不要** | 约 2–5 秒/请求起点，2 个并发 | 本仓库「历史文章」 |
+| 下载文章**正文** | **不要** | 8–15 秒/篇，单请求 | 本仓库「历史文章」 |
 | 写入原来的 SQLite | 不要 | 离线 | 同级仓库 `wechat_crawler` |
 
 因此：**半小时窗口只用来翻页**。列表没拉完就先续约；正文可以等凭证过期后再慢慢下。不要用预编译 App 代替本分支源码。
@@ -89,7 +89,7 @@ git pull
 ```bash
 # Intel Mac
 .venv-intel/bin/python -c "from app import __version__; print(__version__)"
-# 应显示 1.11.0
+# 应显示 1.11.1
 ```
 
 Apple Silicon / Windows 把上面的解释器换成第 3 节里对应的路径。
@@ -143,7 +143,7 @@ python main.py
 
 ---
 
-## 操作指南（Intel Mac，版本 1.11.0）
+## 操作指南（Intel Mac，版本 1.11.1）
 
 环境已经装好、公众号已经批量导入之后，日常按这里做。换显示器或分辨率后，先看本节 **E. 「前往」坐标**。
 
@@ -159,7 +159,7 @@ python main.py
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git pull
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.11.0
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"   # 1.11.1
 .venv-intel/bin/python main.py
 ```
 
@@ -173,7 +173,7 @@ git pull
    1. Safari 全屏打开该号文章 → 点标题下蓝字公众号名 → 点系统弹窗 **「前往」**（坐标见 E 节）
    2. 等微信打开、凭证入库
    3. **只翻页拉列表**（约 1 秒/页）。30 分钟不够就**还是这个号**再捕获、接着翻，不换号
-   4. 列表拉完后立刻下正文（2 并发、请求起点间隔约 2–5 秒）
+   4. 列表拉完后，立刻给这个号下正文（单请求、每篇 8–15 秒）
    5. 这个号正文结束后，间隔约 15 秒，再处理下一个
 4. **不要删号。** 卡片用来续拉、下正文、导入 SQLite。
 5. **不要合盖。** 出现 `unknownerror` / 429 /「频繁」会整队停止，等数小时到一天，不要连点重试。
@@ -298,7 +298,7 @@ cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 ### 程序实际在做什么
 
 1. **凭证有效时只翻页。** `getmsg` 需要 `uin`/`key`。每页约 1 秒，半小时可以缓存几千条 URL 到 `data/history_cache.sqlite`。窗口结束前约 90 秒会停止再开新页，避免用过期 key 请求。
-2. **列表拉完后才自动下正文。** 正文是公开 HTML，不带过期 cookie。默认 **2 个并发**，请求起点间隔自适应 **2–5 秒**；一旦出现「访问过于频繁」立刻整号暂停。不要选 Word 导出（会逐张下图片，极慢）。
+2. **列表拉完后才自动下正文。** 正文是公开 HTML，不带过期 cookie。单请求，每篇随机等待 **8–15 秒**；一旦出现「访问过于频繁」立刻整号暂停。
 3. **列表没拉完而窗口到了：** 不开始数小时正文任务，以便你立刻续约继续翻页。状态会提示缓存了多少篇。
 4. **凭证已过期、列表已在本地：** 按钮变成 **继续归档正文**，可慢慢把已缓存 URL 下完。
 
@@ -310,7 +310,7 @@ cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 2. **重启微信**（若代理刚重开），再重新打开该号文章或滚动历史页。
 3. 倒计时恢复后，到 **历史文章** 选同一账号，再点 **拉取列表并归档**。翻页从缓存的 `next_offset` 继续，不会从头来。
 
-### 无人值守归档（macOS，1.11.0）
+### 无人值守归档（macOS，1.11.1）
 
 细节与权限见上文 **操作指南**。补充行为说明：
 
@@ -382,7 +382,7 @@ python run.py status
 ```bash
 cd "$HOME/Desktop/wechat-work/schinza-wechat-certificate-main"
 git branch --show-current    # 应为 scalable-archive
-.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.11.0
+.venv-intel/bin/python -c "from app import __version__; print(__version__)"  # 1.11.1
 .venv-intel/bin/python main.py
 ```
 

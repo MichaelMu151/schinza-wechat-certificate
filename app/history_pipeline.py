@@ -258,9 +258,6 @@ def run_list_and_archive(
             }
         ),
         should_cancel=should_cancel,
-        sleep_min_s=2.0,
-        sleep_max_s=5.0,
-        max_workers=2,
     )
     summary["archive"] = archive_result
     summary["elapsed_s"] = int(now() - t0)
