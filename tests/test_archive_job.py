@@ -3,7 +3,7 @@ from pathlib import Path
 
 import requests
 
-from app.archive_job import run_archive_job
+from app.archive_job import AdaptiveDelay, RequestPacer, run_archive_job
 
 
 def _articles() -> list[dict]:
@@ -142,4 +142,21 @@ def test_archive_retries_transient_failures_before_recording_success(tmp_path: P
     assert result["ok"] == 1
     assert result["failed"] == 0
     assert result["retries"] == 1
-    assert result["max_workers"] == 1
+    assert result["max_workers"] == 2
+
+
+def test_adaptive_delay_eases_after_successes() -> None:
+    delay = AdaptiveDelay(2.0, 5.0)
+    start = delay.current
+    for _ in range(20):
+        delay.on_success()
+    assert delay.current < start
+    delay.on_rate_limit()
+    assert delay.current >= 5.0
+
+
+def test_request_pacer_skips_wait_when_delay_is_zero() -> None:
+    pacer = RequestPacer(0, 0)
+    pacer.wait()
+    pacer.wait()
+    assert pacer._last > 0

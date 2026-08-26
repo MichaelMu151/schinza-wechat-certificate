@@ -787,9 +787,9 @@ def fetch_article_html(
     url: str,
     *,
     cred: dict[str, Any] | None = None,
-    timeout: float = 25.0,
+    timeout: float = 12.0,
     session: requests.Session | None = None,
-    retries: int = 2,
+    retries: int = 1,
     retry_delay_s: float = 1.0,
 ) -> str:
     """Fetch article page HTML (direct to WeChat, bypass system proxy)."""
@@ -813,6 +813,7 @@ def fetch_article_html(
 
     sess = session or requests.Session()
     sess.trust_env = False
+    sess.proxies = {"http": None, "https": None}
     last_exc: Exception | None = None
     for attempt in range(retries + 1):
         try:
@@ -839,7 +840,7 @@ def fetch_and_parse_article(
     url: str,
     *,
     cred: dict[str, Any] | None = None,
-    timeout: float = 25.0,
+    timeout: float = 12.0,
 ) -> dict[str, Any]:
     html_text = fetch_article_html(url, cred=cred, timeout=timeout)
     return parse_wechat_article_html(html_text, source_url=url)

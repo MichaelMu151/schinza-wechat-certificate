@@ -289,8 +289,17 @@ class MitmCaptureService:
             last_err = ""
             started = False
             used_modes: list[str] = []
-            for use_local in (True, False) if sys.platform == "darwin" else (False,):
-                modes = capture_proxy_modes(use_local=use_local, include_pids=use_local)
+            try_local = False
+            if sys.platform == "darwin":
+                try:
+                    from app.macos_intercept import redirector_state
+
+                    try_local = redirector_state() == "enabled"
+                except Exception:
+                    try_local = False
+            local_flags = (True, False) if try_local else (False,)
+            for use_local in local_flags:
+                modes = capture_proxy_modes(use_local=use_local, include_pids=False)
                 self._start_error = None
                 self._started.clear()
                 self._thread = threading.Thread(
@@ -332,23 +341,24 @@ class MitmCaptureService:
 
             local_hint = ""
             if any(m.startswith("local:") for m in used_modes):
-                from app.macos_intercept import capture_warnings, open_redirector_approval
+                from app.macos_intercept import capture_warnings
 
                 blockers = capture_warnings()
                 if blockers:
-                    try:
-                        open_redirector_approval()
-                    except Exception:
-                        pass
                     local_hint = "\n" + "\n".join(blockers)
                 else:
                     local_hint = (
                         "\n已开启微信进程透明拦截。若刚批准网络扩展，请完全退出并重启微信。"
                     )
             elif sys.platform == "darwin":
+                from app.macos_intercept import capture_warnings
+
+                blockers = capture_warnings()
+                extra = ("\n" + "\n".join(blockers)) if blockers else ""
                 local_hint = (
-                    "\n未能开启微信进程透明拦截，目前只有系统 HTTP 代理；"
-                    "WeChat 4 可能仍抓不到流量。"
+                    "\n当前只用系统 HTTP 代理（网络扩展尚未批准，不启动透明拦截以免抓包线程退出）。"
+                    "可点「批准微信拦截」后再重启代理。"
+                    + extra
                     + (f"（{last_err}）" if last_err else "")
                 )
 
